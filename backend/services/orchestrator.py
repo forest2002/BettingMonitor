@@ -5,9 +5,9 @@ import signal
 from datetime import datetime
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from services.scrapers.betfair import BetfairScraper
-from services.scrapers.paddypower import PaddyPowerScraper
-from services.scrapers.bet365 import Bet365Scraper
+from collections import defaultdict
+from services.scrapers.betfair_factory import get_betfair_client
+from services.scrapers.oddschecker import OddscheckerScraper
 from services.data_processor import data_processor
 from db.database import db
 from db.redis_client import redis_client
@@ -40,26 +40,19 @@ class ScraperOrchestrator:
             await redis_client.connect()
             logger.info("Database connections established")
 
-            # Initialize Betfair Exchange scraper (baseline for comparison)
-            logger.info("Initializing Betfair Exchange scraper...")
-            betfair_scraper = BetfairScraper()
-            await betfair_scraper.initialize()
-            self.scrapers['betfair'] = betfair_scraper
-            logger.info("Betfair Exchange scraper initialized")
+            # Initialize Betfair client (API or scraper based on config)
+            logger.info("Initializing Betfair client...")
+            betfair_client = get_betfair_client()
+            await betfair_client.initialize()
+            self.scrapers['betfair'] = betfair_client
+            logger.info(f"Betfair client initialized: {betfair_client.bookmaker_name}")
 
-            # Initialize Paddy Power scraper
-            logger.info("Initializing Paddy Power scraper...")
-            pp_scraper = PaddyPowerScraper()
-            await pp_scraper.initialize()
-            self.scrapers['paddy_power'] = pp_scraper
-            logger.info("Paddy Power scraper initialized")
-
-            # Initialize Bet365 scraper
-            logger.info("Initializing Bet365 scraper...")
-            bet365_scraper = Bet365Scraper()
-            await bet365_scraper.initialize()
-            self.scrapers['bet365'] = bet365_scraper
-            logger.info("Bet365 scraper initialized")
+            # Initialize Oddschecker scraper (replaces individual PP/Bet365 scrapers)
+            logger.info("Initializing Oddschecker scraper...")
+            oddschecker_scraper = OddscheckerScraper()
+            await oddschecker_scraper.initialize()
+            self.scrapers['oddschecker'] = oddschecker_scraper
+            logger.info("Oddschecker scraper initialized")
 
             # Schedule scraper jobs
             self._schedule_jobs()
@@ -85,27 +78,16 @@ class ScraperOrchestrator:
         )
         logger.info("Scheduled Betfair Exchange scraper every 30 seconds")
 
-        # Paddy Power: every 45 seconds
+        # Oddschecker: every 90 seconds (scrapes multiple race pages)
         self.scheduler.add_job(
             self._run_scraper,
             'interval',
-            seconds=45,
-            args=['paddy_power'],
-            id='paddypower_job',
+            seconds=90,
+            args=['oddschecker'],
+            id='oddschecker_job',
             replace_existing=True
         )
-        logger.info("Scheduled Paddy Power scraper every 45 seconds")
-
-        # Bet365: every 60 seconds (heavy JavaScript site)
-        self.scheduler.add_job(
-            self._run_scraper,
-            'interval',
-            seconds=60,
-            args=['bet365'],
-            id='bet365_job',
-            replace_existing=True
-        )
-        logger.info("Scheduled Bet365 scraper every 60 seconds")
+        logger.info("Scheduled Oddschecker scraper every 90 seconds")
 
     async def _run_scraper(self, scraper_name: str):
         """Run a single scraper"""
@@ -122,12 +104,24 @@ class ScraperOrchestrator:
 
             # Process and store data
             if odds_data_list:
-                stored_count = await data_processor.process_odds_data(
-                    odds_data_list, scraper_name
-                )
+                # Group by bookmaker_name so the data processor creates the
+                # correct bookmaker record for each entry.  The Oddschecker
+                # scraper returns entries for multiple bookmakers in one batch.
+                grouped = defaultdict(list)
+                for entry in odds_data_list:
+                    grouped[entry.bookmaker_name].append(entry)
+
+                total_stored = 0
+                for bookmaker_name, entries in grouped.items():
+                    stored_count = await data_processor.process_odds_data(
+                        entries, bookmaker_name
+                    )
+                    total_stored += stored_count
+
                 logger.info(
                     f"{scraper_name} scrape complete: "
-                    f"{len(odds_data_list)} scraped, {stored_count} stored"
+                    f"{len(odds_data_list)} scraped, {total_stored} stored "
+                    f"across {len(grouped)} bookmakers"
                 )
             else:
                 logger.info(f"{scraper_name} scrape complete: no data found")
