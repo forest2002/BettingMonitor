@@ -1,0 +1,40 @@
+# Scraper Configuration
+
+scrapers:
+  profit_maximiser:
+    enabled: true
+    interval_seconds: 20
+    mode: scraper
+
+  betfair:
+    enabled: false
+    interval_seconds: 30
+    mode: scraper  # Change to 'api' when API key is available
+    api_config:
+      app_key: ""
+      username: ""
+      password: ""
+
+  bet365:
+    enabled: false
+    interval_seconds: 45
+
+  william_hill:
+    enabled: false
+    interval_seconds: 45
+
+  ladbrokes:
+    enabled: false
+    interval_seconds: 60
+
+# Anti-detection settings
+anti_detection:
+  random_delay_min: 1
+  random_delay_max: 3
+  user_agent_rotation: true
+
+# Rate limiting
+rate_limiting:
+  max_requests_per_minute: 60
+  backoff_factor: 2
+  max_retries: 3

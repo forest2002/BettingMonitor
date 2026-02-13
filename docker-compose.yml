@@ -1,0 +1,130 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg15
+    container_name: betting-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME:-betting_monitor}
+      POSTGRES_USER: ${DB_USER:-betting_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-betting_password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-betting_user}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - betting-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: betting-redis
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - betting-network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: betting-backend
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-betting_monitor}
+      DB_USER: ${DB_USER:-betting_user}
+      DB_PASSWORD: ${DB_PASSWORD:-betting_password}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      API_HOST: 0.0.0.0
+      API_PORT: 8000
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+      - scraper-cache:/app/cache
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - betting-network
+
+  scraper:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: betting-scraper
+    environment:
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: ${DB_NAME:-betting_monitor}
+      DB_USER: ${DB_USER:-betting_user}
+      DB_PASSWORD: ${DB_PASSWORD:-betting_password}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      BETFAIR_MODE: ${BETFAIR_MODE:-scraper}
+      PROFIT_MAXIMISER_EMAIL: ${PROFIT_MAXIMISER_EMAIL}
+      PROFIT_MAXIMISER_PASSWORD: ${PROFIT_MAXIMISER_PASSWORD}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./backend:/app
+      - scraper-cache:/app/cache
+      - ./config:/app/config
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: python -m services.orchestrator
+    networks:
+      - betting-network
+    # Install Chrome dependencies for Selenium
+    cap_add:
+      - SYS_ADMIN
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    container_name: betting-frontend
+    environment:
+      VITE_API_URL: http://localhost:8000
+      VITE_WS_URL: ws://localhost:8000/ws
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    depends_on:
+      - backend
+    command: npm run dev -- --host 0.0.0.0
+    networks:
+      - betting-network
+
+volumes:
+  postgres-data:
+  redis-data:
+  scraper-cache:
+
+networks:
+  betting-network:
+    driver: bridge
