@@ -166,7 +166,9 @@ CREATE TRIGGER update_scraper_status_updated_at BEFORE UPDATE ON scraper_status
     FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 -- Add compression policy for old data (compress data older than 7 days)
-SELECT add_compression_policy('odds_history', INTERVAL '7 days');
+-- Disabled for MVP - requires columnstore to be enabled first
+-- SELECT add_compression_policy('odds_history', INTERVAL '7 days');
 
 -- Add retention policy to drop data older than 90 days
-SELECT add_retention_policy('odds_history', INTERVAL '90 days');
+-- Disabled for MVP
+-- SELECT add_retention_policy('odds_history', INTERVAL '90 days');

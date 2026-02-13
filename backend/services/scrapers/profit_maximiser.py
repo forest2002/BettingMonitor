@@ -7,7 +7,8 @@ from decimal import Decimal
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver import Keys
-import undetected_chromedriver as uc
+from selenium.webdriver.chrome.service import Service
+from selenium.webdriver.chrome.options import Options
 from models.schemas import OddsData
 from services.scrapers.base import BookmakerScraper
 import logging
@@ -32,15 +33,20 @@ class ProfitMaximiserScraper(BookmakerScraper):
         self.logger.info("Initializing ProfitMaximiser scraper...")
 
         try:
-            # Setup Chrome options
-            chrome_options = uc.ChromeOptions()
-            chrome_options.add_argument('--headless')
+            # Setup Chrome options for Chromium
+            chrome_options = Options()
+            chrome_options.add_argument('--headless=new')
             chrome_options.add_argument('--no-sandbox')
             chrome_options.add_argument('--disable-dev-shm-usage')
             chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+            chrome_options.add_argument('--disable-gpu')
+            chrome_options.binary_location = '/usr/bin/chromium'
+
+            # Use the installed chromedriver
+            service = Service('/usr/bin/chromedriver')
 
             # Initialize driver
-            self.driver = uc.Chrome(options=chrome_options)
+            self.driver = webdriver.Chrome(service=service, options=chrome_options)
             self.driver.get(self.url)
 
             # Wait for page load

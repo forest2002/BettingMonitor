@@ -9,7 +9,6 @@ python-multipart==0.0.6
 
 # Scraping
 selenium==4.16.0
-undetected-chromedriver==3.5.5
 beautifulsoup4==4.12.3
 lxml==5.1.0
 
