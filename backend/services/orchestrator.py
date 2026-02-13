@@ -5,7 +5,9 @@ import signal
 from datetime import datetime
 from dotenv import load_dotenv
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from services.scrapers.profit_maximiser import ProfitMaximiserScraper
+from services.scrapers.betfair import BetfairScraper
+from services.scrapers.paddypower import PaddyPowerScraper
+from services.scrapers.bet365 import Bet365Scraper
 from services.data_processor import data_processor
 from db.database import db
 from db.redis_client import redis_client
@@ -38,12 +40,26 @@ class ScraperOrchestrator:
             await redis_client.connect()
             logger.info("Database connections established")
 
-            # Initialize ProfitMaximiser scraper
-            logger.info("Initializing ProfitMaximiser scraper...")
-            pm_scraper = ProfitMaximiserScraper()
-            await pm_scraper.initialize()
-            self.scrapers['profit_maximiser'] = pm_scraper
-            logger.info("ProfitMaximiser scraper initialized")
+            # Initialize Betfair Exchange scraper (baseline for comparison)
+            logger.info("Initializing Betfair Exchange scraper...")
+            betfair_scraper = BetfairScraper()
+            await betfair_scraper.initialize()
+            self.scrapers['betfair'] = betfair_scraper
+            logger.info("Betfair Exchange scraper initialized")
+
+            # Initialize Paddy Power scraper
+            logger.info("Initializing Paddy Power scraper...")
+            pp_scraper = PaddyPowerScraper()
+            await pp_scraper.initialize()
+            self.scrapers['paddy_power'] = pp_scraper
+            logger.info("Paddy Power scraper initialized")
+
+            # Initialize Bet365 scraper
+            logger.info("Initializing Bet365 scraper...")
+            bet365_scraper = Bet365Scraper()
+            await bet365_scraper.initialize()
+            self.scrapers['bet365'] = bet365_scraper
+            logger.info("Bet365 scraper initialized")
 
             # Schedule scraper jobs
             self._schedule_jobs()
@@ -58,16 +74,38 @@ class ScraperOrchestrator:
 
     def _schedule_jobs(self):
         """Schedule scraper jobs"""
-        # ProfitMaximiser: every 20 seconds
+        # Betfair Exchange: every 30 seconds (baseline odds)
         self.scheduler.add_job(
             self._run_scraper,
             'interval',
-            seconds=20,
-            args=['profit_maximiser'],
-            id='profit_maximiser_job',
+            seconds=30,
+            args=['betfair'],
+            id='betfair_job',
             replace_existing=True
         )
-        logger.info("Scheduled ProfitMaximiser scraper every 20 seconds")
+        logger.info("Scheduled Betfair Exchange scraper every 30 seconds")
+
+        # Paddy Power: every 45 seconds
+        self.scheduler.add_job(
+            self._run_scraper,
+            'interval',
+            seconds=45,
+            args=['paddy_power'],
+            id='paddypower_job',
+            replace_existing=True
+        )
+        logger.info("Scheduled Paddy Power scraper every 45 seconds")
+
+        # Bet365: every 60 seconds (heavy JavaScript site)
+        self.scheduler.add_job(
+            self._run_scraper,
+            'interval',
+            seconds=60,
+            args=['bet365'],
+            id='bet365_job',
+            replace_existing=True
+        )
+        logger.info("Scheduled Bet365 scraper every 60 seconds")
 
     async def _run_scraper(self, scraper_name: str):
         """Run a single scraper"""
