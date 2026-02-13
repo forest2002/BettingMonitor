@@ -1,14 +1,22 @@
-import { useEffect } from 'react'
-import { Box, Typography, CircularProgress, Alert } from '@mui/material'
+import { useEffect, useState } from 'react'
+import { Box, Typography, CircularProgress, Alert, Tabs, Tab } from '@mui/material'
+import TrendingUpIcon from '@mui/icons-material/TrendingUp'
+import ListIcon from '@mui/icons-material/List'
 import { OddsTable } from './OddsTable'
+import { OpportunitiesPanel } from './OpportunitiesPanel'
 import { useOddsStore } from '../../stores/oddsStore'
 
 export const Dashboard = () => {
   const { events, fetchEvents, isLoading, error } = useOddsStore()
+  const [activeTab, setActiveTab] = useState(0)
 
   useEffect(() => {
     fetchEvents()
   }, [])
+
+  const handleTabChange = (_event: React.SyntheticEvent, newValue: number) => {
+    setActiveTab(newValue)
+  }
 
   if (isLoading && events.length === 0) {
     return (
@@ -33,23 +41,34 @@ export const Dashboard = () => {
     )
   }
 
-  if (events.length === 0) {
-    return (
-      <Alert severity="info" sx={{ mb: 2 }}>
-        No upcoming events found. The scraper may still be initializing.
-      </Alert>
-    )
-  }
-
   return (
     <Box>
       <Typography variant="h4" component="h1" gutterBottom>
-        Upcoming Events
+        Betting Monitor
       </Typography>
-      <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
-        Showing {events.length} events in the next 24 hours
-      </Typography>
-      <OddsTable />
+
+      <Tabs value={activeTab} onChange={handleTabChange} sx={{ mb: 3 }}>
+        <Tab icon={<TrendingUpIcon />} label="Each-Way Opportunities" />
+        <Tab icon={<ListIcon />} label="All Races & Odds" />
+      </Tabs>
+
+      {activeTab === 0 && <OpportunitiesPanel />}
+      {activeTab === 1 && (
+        <>
+          {events.length === 0 ? (
+            <Alert severity="info">
+              No upcoming events found. The scraper may still be initializing.
+            </Alert>
+          ) : (
+            <>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+                Showing {events.length} events in the next 24 hours
+              </Typography>
+              <OddsTable />
+            </>
+          )}
+        </>
+      )}
     </Box>
   )
 }
