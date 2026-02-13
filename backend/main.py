@@ -10,7 +10,7 @@ from db.database import db
 from db.redis_client import redis_client
 
 # Import routes
-from api.routes import events, odds, status
+from api.routes import events, odds, status, opportunities
 
 # Load environment variables
 load_dotenv()
@@ -65,6 +65,7 @@ app.add_middleware(
 app.include_router(events.router)
 app.include_router(odds.router)
 app.include_router(status.router)
+app.include_router(opportunities.router)
 
 @app.get("/")
 async def root():
