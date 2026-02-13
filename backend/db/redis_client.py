@@ -2,7 +2,19 @@ import redis.asyncio as redis
 import os
 import json
 import logging
+from datetime import datetime
+from decimal import Decimal
 from typing import Optional, Any
+
+
+class _JSONEncoder(json.JSONEncoder):
+    """JSON encoder that handles Decimal and datetime types from the database."""
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            return float(obj)
+        if isinstance(obj, datetime):
+            return obj.isoformat()
+        return super().default(obj)
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +49,7 @@ class RedisClient:
     async def set(self, key: str, value: Any, expiry: int = 300):
         """Set key-value pair with optional expiry in seconds"""
         if isinstance(value, (dict, list)):
-            value = json.dumps(value)
+            value = json.dumps(value, cls=_JSONEncoder)
         await self.client.set(key, value, ex=expiry)
 
     async def get(self, key: str) -> Optional[Any]:
@@ -57,7 +69,7 @@ class RedisClient:
     async def publish(self, channel: str, message: Any):
         """Publish message to channel"""
         if isinstance(message, (dict, list)):
-            message = json.dumps(message)
+            message = json.dumps(message, cls=_JSONEncoder)
         await self.client.publish(channel, message)
 
     async def subscribe(self, channel: str):
