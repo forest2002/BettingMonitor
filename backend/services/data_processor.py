@@ -1,4 +1,5 @@
 import logging
+import json
 from typing import List
 from datetime import datetime
 from models.schemas import OddsData
@@ -108,16 +109,28 @@ class DataProcessor:
         event_type_id = event_type['id']
 
         # Check if event exists (same name, venue, and scheduled time within 5 minutes)
-        query = """
-            SELECT id, event_type_id, name, venue, scheduled_time, status, metadata
-            FROM events
-            WHERE name = $1
-            AND venue = $2
-            AND scheduled_time BETWEEN $3 - INTERVAL '5 minutes' AND $3 + INTERVAL '5 minutes'
-            ORDER BY created_at DESC
-            LIMIT 1
-        """
-        event = await db.fetch_one(query, odds_data.event_name, odds_data.venue, odds_data.scheduled_time)
+        if odds_data.venue:
+            query = """
+                SELECT id, event_type_id, name, venue, scheduled_time, status, metadata
+                FROM events
+                WHERE name = $1
+                AND venue = $2
+                AND ABS(EXTRACT(EPOCH FROM (scheduled_time - $3))) < 300
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            event = await db.fetch_one(query, odds_data.event_name, odds_data.venue, odds_data.scheduled_time)
+        else:
+            query = """
+                SELECT id, event_type_id, name, venue, scheduled_time, status, metadata
+                FROM events
+                WHERE name = $1
+                AND venue IS NULL
+                AND ABS(EXTRACT(EPOCH FROM (scheduled_time - $3))) < 300
+                ORDER BY created_at DESC
+                LIMIT 1
+            """
+            event = await db.fetch_one(query, odds_data.event_name, odds_data.scheduled_time)
 
         if event:
             return dict(event)
@@ -134,7 +147,7 @@ class DataProcessor:
             odds_data.event_name,
             odds_data.venue,
             odds_data.scheduled_time,
-            odds_data.metadata
+            json.dumps(odds_data.metadata) if odds_data.metadata else None
         )
         return dict(event)
 
@@ -163,7 +176,7 @@ class DataProcessor:
             WHERE selection_id = $1
             AND bookmaker_id = $2
             AND odds_decimal = $3
-            AND scraped_at > NOW() - INTERVAL '2 minutes'
+            AND scraped_at > NOW() - '2 minutes'::interval
         """
         result = await db.fetch_one(query, selection_id, bookmaker_id, float(odds_decimal))
         return result['count'] > 0
@@ -185,7 +198,7 @@ class DataProcessor:
             float(odds_data.place_odds) if odds_data.place_odds else None,
             odds_data.place_terms,
             datetime.now(),
-            odds_data.metadata
+            json.dumps(odds_data.metadata) if odds_data.metadata else None
         )
 
     async def _update_cache(

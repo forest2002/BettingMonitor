@@ -1,14 +1,32 @@
 #!/usr/bin/env python3
 """
 Add test data with each-way opportunities
+
+WARNING: This script inserts FAKE test data into the database.
+Only run this in development/testing environments.
 """
 import asyncio
+import os
 import sys
 from datetime import datetime, timedelta
 from decimal import Decimal
 sys.path.append('/app')
 
 from db.database import db
+
+
+def _confirm_test_environment():
+    """Prevent accidental execution in production"""
+    env = os.getenv("ENVIRONMENT", "").lower()
+    if env == "production":
+        print("ERROR: Cannot run test data scripts in production environment.")
+        print("Set ENVIRONMENT to 'development' or 'test' to use this script.")
+        sys.exit(1)
+    if env not in ("development", "test", "dev"):
+        response = input("WARNING: ENVIRONMENT is not set. Are you sure you want to add test data? (yes/no): ")
+        if response.strip().lower() != "yes":
+            print("Aborted.")
+            sys.exit(0)
 
 async def clear_existing_data():
     """Clear existing test data"""
@@ -191,4 +209,5 @@ async def add_each_way_test_data():
         await db.disconnect()
 
 if __name__ == "__main__":
+    _confirm_test_environment()
     asyncio.run(add_each_way_test_data())

@@ -1,0 +1,293 @@
+import os
+import asyncio
+from typing import List, Optional
+from datetime import datetime, timedelta
+from decimal import Decimal
+import betfairlightweight
+from betfairlightweight import APIClient
+from betfairlightweight.filters import market_filter, streaming_market_filter
+from betfairlightweight.resources import MarketBook, RunnerBook
+from models.schemas import OddsData
+from services.scrapers.base import BookmakerScraper
+import logging
+
+logger = logging.getLogger(__name__)
+
+
+class BetfairAPIClient(BookmakerScraper):
+    """Betfair API client using official Betfair API via betfairlightweight"""
+
+    def __init__(self):
+        super().__init__("betfair_api")
+        self.client: Optional[APIClient] = None
+        self.username = os.getenv("BETFAIR_USERNAME")
+        self.password = os.getenv("BETFAIR_PASSWORD")
+        self.app_key = os.getenv("BETFAIR_APP_KEY")
+        self.cert_path = os.getenv("BETFAIR_CERT_PATH")  # Optional: for cert-based auth
+
+        # Validate credentials
+        if not all([self.username, self.password, self.app_key]):
+            raise ValueError(
+                "Missing Betfair API credentials. Required: BETFAIR_USERNAME, "
+                "BETFAIR_PASSWORD, BETFAIR_APP_KEY"
+            )
+
+    async def initialize(self):
+        """Initialize Betfair API client and login"""
+        self.logger.info("Initializing Betfair API client...")
+
+        try:
+            # Create API client with lightweight_login (interactive login without certs)
+            self.client = betfairlightweight.APIClient(
+                username=self.username,
+                password=self.password,
+                app_key=self.app_key,
+                lightweight=True,  # Use lightweight mode (no certs required)
+            )
+
+            # Login to Betfair using interactive login
+            self.client.login_interactive()
+            self.logger.info("Successfully logged in to Betfair API (interactive mode)")
+
+            # Keep session alive
+            self.client.keep_alive()
+
+            self.is_running = True
+            self.logger.info("Betfair API client initialized successfully")
+
+        except Exception as e:
+            self.logger.error(f"Failed to initialize Betfair API client: {e}", exc_info=True)
+            await self.cleanup()
+            raise
+
+    async def scrape(self) -> List[OddsData]:
+        """Fetch odds from Betfair API for upcoming horse races"""
+        if not self.client:
+            self.logger.error("API client not initialized")
+            return []
+
+        odds_data_list = []
+
+        try:
+            # Keep session alive
+            self.client.keep_alive()
+
+            # Create market filter for horse racing
+            # Get markets starting in the next 24 hours
+            market_filter_obj = market_filter(
+                event_type_ids=['7'],  # 7 = Horse Racing
+                market_countries=['GB', 'IE'],  # UK and Ireland
+                market_type_codes=['WIN'],  # Win market
+                market_start_time={
+                    'from': datetime.utcnow().isoformat(),
+                    'to': (datetime.utcnow() + timedelta(hours=24)).isoformat()
+                }
+            )
+
+            # List market catalogues
+            market_catalogues = self.client.betting.list_market_catalogue(
+                filter=market_filter_obj,
+                max_results=100,
+                market_projection=[
+                    'COMPETITION',
+                    'EVENT',
+                    'EVENT_TYPE',
+                    'MARKET_START_TIME',
+                    'MARKET_DESCRIPTION',
+                    'RUNNER_DESCRIPTION',
+                    'RUNNER_METADATA'
+                ]
+            )
+
+            self.logger.info(f"Found {len(market_catalogues)} markets from Betfair API")
+
+            # Get market IDs to fetch live odds
+            # Handle both dict and object responses from API
+            market_ids = []
+            for market in market_catalogues[:10]:  # Limit to 10 markets
+                if isinstance(market, dict):
+                    market_ids.append(market.get('marketId'))
+                else:
+                    market_ids.append(market.market_id)
+
+            if not market_ids:
+                self.logger.info("No horse racing markets found")
+                return []
+
+            # Fetch live market books (current odds)
+            market_books = self.client.betting.list_market_book(
+                market_ids=market_ids,
+                price_projection={
+                    'priceData': ['EX_BEST_OFFERS'],  # Exchange best back/lay prices
+                }
+            )
+
+            self.logger.info(f"Got {len(market_books)} market books")
+            if market_books:
+                self.logger.info(f"First market book type: {type(market_books[0])}, has runners: {hasattr(market_books[0], 'runners') if not isinstance(market_books[0], dict) else 'runners' in market_books[0]}")
+
+            # Process each market
+            self.logger.info(f"About to zip {len(market_catalogues)} catalogues with {len(market_books)} books")
+            for idx, (catalogue, market_book) in enumerate(zip(market_catalogues, market_books)):
+                try:
+                    self.logger.info(f"Processing market {idx+1}/{len(market_catalogues)}")
+
+                    # Handle both dict and object responses
+                    if isinstance(catalogue, dict):
+                        event_name = catalogue.get('event', {}).get('name')
+                        venue = catalogue.get('event', {}).get('venue')
+                        scheduled_time = datetime.fromisoformat(catalogue.get('marketStartTime', '').replace('Z', '+00:00'))
+                        market_id = catalogue.get('marketId', '')
+                        runners = catalogue.get('runners', [])
+
+                        if not event_name:
+                            self.logger.warning(f"Skipping market with missing event name: {market_id}")
+                            continue
+
+                        # Create runner name mapping
+                        runner_map = {
+                            r.get('selectionId'): r.get('runnerName')
+                            for r in runners
+                        }
+                    else:
+                        event_name = catalogue.event.name if catalogue.event else None
+                        venue = catalogue.event.venue if catalogue.event else None
+
+                        if not event_name:
+                            self.logger.warning(f"Skipping market with missing event name")
+                            continue
+                        scheduled_time = catalogue.market_start_time
+                        market_id = catalogue.market_id
+
+                        # Create runner name mapping
+                        runner_map = {
+                            runner.selection_id: runner.runner_name
+                            for runner in catalogue.runners
+                        }
+
+                    # Process each runner (horse)
+                    if isinstance(market_book, dict):
+                        runners_list = market_book.get('runners', [])
+                    else:
+                        runners_list = market_book.runners
+
+                    self.logger.info(f"Market {market_id} has {len(runners_list)} runners, runner_map has {len(runner_map)} entries")
+
+                    if runners_list and len(odds_data_list) < 5:  # Log first few for debugging
+                        self.logger.info(f"Sample runner: {runners_list[0] if isinstance(runners_list[0], dict) else 'object'}")
+
+                    for runner_idx, runner in enumerate(runners_list):
+                        try:
+                            # Handle both dict and object responses
+                            if isinstance(runner, dict):
+                                selection_id = runner.get('selectionId')
+                                horse_name = runner_map.get(selection_id)
+                                if not horse_name:
+                                    self.logger.debug(f"Skipping runner with no name (selection_id: {selection_id})")
+                                    continue
+
+                                # Get best back odds
+                                ex_data = runner.get('ex', {})
+                                available_to_back = ex_data.get('availableToBack', [])
+
+                                if runner_idx == 0 and len(odds_data_list) < 3:  # Log first runner of first few markets
+                                    self.logger.info(f"Sample runner for {horse_name}: has ex={bool(ex_data)}, availableToBack={len(available_to_back)} items")
+
+                                if not available_to_back:
+                                    continue
+
+                                back_price = Decimal(str(available_to_back[0].get('price', 0)))
+                                if back_price == 0:
+                                    self.logger.debug(f"Zero back price for {horse_name}")
+                                    continue
+
+                                # Get best lay odds
+                                lay_price = None
+                                available_to_lay = ex_data.get('availableToLay', [])
+                                if available_to_lay:
+                                    lay_price = Decimal(str(available_to_lay[0].get('price', 0)))
+                            else:
+                                selection_id = runner.selection_id
+                                horse_name = runner_map.get(selection_id)
+                                if not horse_name:
+                                    self.logger.debug(f"Skipping runner with no name (selection_id: {selection_id})")
+                                    continue
+
+                                # Get best back odds (what you can bet at)
+                                if runner.ex and runner.ex.available_to_back:
+                                    best_back = runner.ex.available_to_back[0]
+                                    back_price = Decimal(str(best_back.price))
+                                else:
+                                    # No odds available
+                                    continue
+
+                                # Get best lay odds (what you can lay at)
+                                lay_price = None
+                                if runner.ex and runner.ex.available_to_lay:
+                                    best_lay = runner.ex.available_to_lay[0]
+                                    lay_price = Decimal(str(best_lay.price))
+
+                            # Create odds data
+                            runner_status = runner.get('status', 'ACTIVE') if isinstance(runner, dict) else runner.status
+
+                            odds_data = OddsData(
+                                event_name=event_name,
+                                venue=venue,
+                                scheduled_time=scheduled_time,
+                                selection_name=horse_name,
+                                odds_decimal=back_price,
+                                place_odds=lay_price,  # Store lay price as place_odds for comparison
+                                place_terms=None,
+                                bookmaker_name="Betfair Exchange",
+                                event_type="horse_racing",
+                                metadata={
+                                    "market_id": market_id,
+                                    "selection_id": selection_id,
+                                    "source": "betfair_api",
+                                    "status": runner_status
+                                }
+                            )
+
+                            odds_data_list.append(odds_data)
+                            self.logger.debug(
+                                f"API: {horse_name} @ {back_price} (back) / {lay_price} (lay)"
+                            )
+
+                        except Exception as e:
+                            self.logger.debug(f"Error processing runner: {e}")
+                            continue
+
+                except Exception as e:
+                    self.logger.error(f"Error processing market: {e}", exc_info=True)
+                    continue
+
+            self.logger.info(f"Scraped {len(odds_data_list)} odds from Betfair API")
+
+        except Exception as e:
+            self.logger.error(f"Error during Betfair API scrape: {e}", exc_info=True)
+
+        return odds_data_list
+
+    async def cleanup(self):
+        """Logout and cleanup"""
+        self.logger.info("Cleaning up Betfair API client...")
+        if self.client:
+            try:
+                self.client.logout()
+            except Exception as e:
+                self.logger.error(f"Error during logout: {e}")
+        self.is_running = False
+        self.logger.info("Betfair API client cleanup complete")
+
+    def health_check(self) -> bool:
+        """Check if API client is healthy"""
+        if not self.is_running or not self.client:
+            return False
+
+        try:
+            # Try to keep alive - if this fails, we're not logged in
+            self.client.keep_alive()
+            return True
+        except Exception as e:
+            self.logger.error(f"Health check failed: {e}")
+            return False

@@ -89,7 +89,10 @@ class PaddyPowerScraper(BookmakerScraper):
                     # Extract race details
                     race_name_elem = race.find_elements(By.CSS_SELECTOR,
                         '[class*="race-name"], [class*="event-name"], h3, h4')
-                    race_name = race_name_elem[0].text if race_name_elem else "Unknown Race"
+                    race_name = race_name_elem[0].text if race_name_elem else None
+                    if not race_name:
+                        self.logger.debug("Skipping race with no name")
+                        continue
 
                     time_elem = race.find_elements(By.CSS_SELECTOR,
                         '[class*="time"], time, [class*="race-time"]')
@@ -97,7 +100,7 @@ class PaddyPowerScraper(BookmakerScraper):
 
                     venue_elem = race.find_elements(By.CSS_SELECTOR,
                         '[class*="venue"], [class*="course"]')
-                    venue = venue_elem[0].text if venue_elem else "Unknown"
+                    venue = venue_elem[0].text if venue_elem else None
 
                     scheduled_time = self._parse_race_time(race_time)
 

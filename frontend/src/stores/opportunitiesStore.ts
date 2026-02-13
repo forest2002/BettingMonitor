@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+
 interface Opportunity {
   selection_name: string
   event_name: string
@@ -33,7 +35,7 @@ export const useOpportunitiesStore = create<OpportunitiesState>((set) => ({
     set({ isLoading: true, error: null })
     try {
       const response = await fetch(
-        `http://localhost:8000/opportunities/each-way?min_rating=${minRating}`
+        `${API_BASE_URL}/opportunities/each-way?min_rating=${minRating}`
       )
       if (!response.ok) {
         throw new Error('Failed to fetch opportunities')

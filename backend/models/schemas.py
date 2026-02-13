@@ -90,7 +90,7 @@ class ScraperStatusSchema(BaseModel):
 class OddsData(BaseModel):
     """Standardized format for scraped odds data"""
     event_name: str
-    venue: str
+    venue: Optional[str] = None
     scheduled_time: datetime
     selection_name: str
     odds_decimal: Decimal

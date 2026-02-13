@@ -87,12 +87,16 @@ class Bet365Scraper(BookmakerScraper):
                     # Bet365 uses complex nested structures
                     race_name_elem = race.find_elements(By.CSS_SELECTOR,
                         '[class*="RaceHeader"], [class*="event-header"], span, div')
-                    race_name = "Unknown Race"
+                    race_name = None
                     for elem in race_name_elem:
                         text = elem.text.strip()
                         if text and len(text) > 5:
                             race_name = text
                             break
+
+                    if not race_name:
+                        self.logger.debug("Skipping race with no name on Bet365")
+                        continue
 
                     # Extract time
                     time_elem = race.find_elements(By.CSS_SELECTOR,
@@ -147,7 +151,7 @@ class Bet365Scraper(BookmakerScraper):
 
                             odds_data = OddsData(
                                 event_name=race_name,
-                                venue="Unknown",  # Bet365 venue extraction is complex
+                                venue=None,  # Bet365 venue extraction needs custom selectors
                                 scheduled_time=scheduled_time,
                                 selection_name=horse_name,
                                 odds_decimal=odds_decimal,

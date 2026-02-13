@@ -93,7 +93,7 @@ class BetfairScraper(BookmakerScraper):
 
                     # Try to extract venue
                     venue_elem = race.find_elements(By.CSS_SELECTOR, '.venue, .course-name')
-                    venue = venue_elem[0].text if venue_elem else "Unknown"
+                    venue = venue_elem[0].text if venue_elem else None
 
                     # Parse time - estimate scheduled time
                     scheduled_time = self._parse_race_time(race_time_text)
