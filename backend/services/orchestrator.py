@@ -78,16 +78,62 @@ class ScraperOrchestrator:
         )
         logger.info("Scheduled Betfair Exchange scraper every 30 seconds")
 
-        # Oddschecker: every 90 seconds (scrapes multiple race pages)
+        # Oddschecker: every 10 minutes (scrapes all UK/Irish race pages)
         self.scheduler.add_job(
             self._run_scraper,
             'interval',
-            seconds=90,
+            minutes=10,
             args=['oddschecker'],
             id='oddschecker_job',
             replace_existing=True
         )
-        logger.info("Scheduled Oddschecker scraper every 90 seconds")
+        logger.info("Scheduled Oddschecker scraper every 10 minutes")
+
+        # Cleanup: remove finished races every 5 minutes
+        self.scheduler.add_job(
+            self._cleanup_old_events,
+            'interval',
+            minutes=5,
+            id='cleanup_job',
+            replace_existing=True
+        )
+        logger.info("Scheduled event cleanup every 5 minutes")
+
+    async def _cleanup_old_events(self):
+        """Delete events (and their selections/odds) that finished more than 30 minutes ago"""
+        try:
+            # Delete odds for old events
+            delete_odds = """
+                DELETE FROM odds_history
+                WHERE selection_id IN (
+                    SELECT s.id FROM selections s
+                    JOIN events e ON s.event_id = e.id
+                    WHERE e.scheduled_time < NOW() - INTERVAL '30 minutes'
+                )
+            """
+            await db.execute(delete_odds)
+
+            # Delete selections for old events
+            delete_selections = """
+                DELETE FROM selections
+                WHERE event_id IN (
+                    SELECT id FROM events
+                    WHERE scheduled_time < NOW() - INTERVAL '30 minutes'
+                )
+            """
+            await db.execute(delete_selections)
+
+            # Delete old events
+            delete_events = """
+                DELETE FROM events
+                WHERE scheduled_time < NOW() - INTERVAL '30 minutes'
+            """
+            result = await db.execute(delete_events)
+
+            logger.info("Cleaned up old events")
+
+        except Exception as e:
+            logger.error(f"Error cleaning up old events: {e}", exc_info=True)
 
     async def _run_scraper(self, scraper_name: str):
         """Run a single scraper"""

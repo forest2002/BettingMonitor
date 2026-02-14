@@ -34,6 +34,28 @@ TARGET_BOOKMAKERS = {
 }
 
 
+# UK and Irish racecourses (slug form as they appear in Oddschecker URLs)
+UK_IRISH_VENUES = {
+    'aintree', 'ascot', 'ayr', 'bangor-on-dee', 'bath', 'beverley',
+    'brighton', 'carlisle', 'cartmel', 'catterick', 'chelmsford-city',
+    'cheltenham', 'chepstow', 'chester', 'cork', 'curragh', 'doncaster',
+    'down-royal', 'downpatrick', 'dundalk', 'epsom', 'exeter',
+    'fairyhouse', 'fakenham', 'ffos-las', 'fontwell', 'galway',
+    'goodwood', 'gowran-park', 'hamilton', 'haydock', 'hereford',
+    'hexham', 'huntingdon', 'kelso', 'kempton', 'kilbeggan',
+    'killarney', 'laytown', 'leicester', 'leopardstown', 'limerick',
+    'lingfield', 'listowel', 'ludlow', 'market-rasen', 'musselburgh',
+    'naas', 'navan', 'newbury', 'newcastle', 'newmarket', 'newton-abbot',
+    'nottingham', 'perth', 'plumpton', 'pontefract', 'punchestown',
+    'redcar', 'ripon', 'roscommon', 'salisbury', 'sandown',
+    'sedgefield', 'sligo', 'southwell', 'stratford', 'taunton',
+    'thirsk', 'thurles', 'tipperary', 'towcester', 'tramore',
+    'uttoxeter', 'warwick', 'wetherby', 'wexford', 'wincanton',
+    'winchester', 'windsor', 'wolverhampton', 'worcester', 'yarmouth',
+    'york',
+}
+
+
 def _make_chrome_options() -> Options:
     """Create standard Chrome options for Oddschecker"""
     chrome_options = Options()
@@ -69,7 +91,7 @@ class OddscheckerScraper(BookmakerScraper):
     def __init__(self):
         super().__init__("oddschecker")
         self.base_url = "https://www.oddschecker.com/horse-racing"
-        self.max_races = 15
+        self.max_races = 60
 
     async def initialize(self):
         """Validate that Chrome driver can launch"""
@@ -132,8 +154,13 @@ class OddscheckerScraper(BookmakerScraper):
                 href = elem.get_attribute('href')
                 if not href:
                     continue
-                if re.search(r'/horse-racing/[^/]+/\d{2}:\d{2}/winner$', href):
-                    if href not in race_links:
+                match = re.search(
+                    r'/horse-racing/(?:\d{4}-\d{2}-\d{2}-)?([^/]+)/\d{2}:\d{2}/winner$',
+                    href,
+                )
+                if match:
+                    venue_slug = match.group(1)
+                    if venue_slug in UK_IRISH_VENUES and href not in race_links:
                         race_links.append(href)
 
             return race_links
@@ -253,7 +280,10 @@ class OddscheckerScraper(BookmakerScraper):
         race_time = ""
         match = re.search(r'/horse-racing/([^/]+)/(\d{2}:\d{2})', url)
         if match:
-            venue = match.group(1).replace('-', ' ').title()
+            raw_venue = match.group(1)
+            # Strip date prefixes like "2026-02-14-" from venue slugs
+            raw_venue = re.sub(r'^\d{4}-\d{2}-\d{2}-', '', raw_venue)
+            venue = raw_venue.replace('-', ' ').title()
             race_time = match.group(2)
         return venue, race_time
 
