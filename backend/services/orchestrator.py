@@ -67,27 +67,27 @@ class ScraperOrchestrator:
 
     def _schedule_jobs(self):
         """Schedule scraper jobs"""
-        # Betfair Exchange: every 30 seconds (baseline odds)
+        # Betfair Exchange: every 45 seconds (baseline odds)
         self.scheduler.add_job(
             self._run_scraper,
             'interval',
-            seconds=30,
+            seconds=45,
             args=['betfair'],
             id='betfair_job',
             replace_existing=True
         )
-        logger.info("Scheduled Betfair Exchange scraper every 30 seconds")
+        logger.info("Scheduled Betfair Exchange scraper every 45 seconds")
 
-        # Oddschecker: every 60 seconds (scrapes all UK/Irish race pages)
+        # Oddschecker: every 45 seconds (scrapes all UK/Irish race pages)
         self.scheduler.add_job(
             self._run_scraper,
             'interval',
-            seconds=60,
+            seconds=45,
             args=['oddschecker'],
             id='oddschecker_job',
             replace_existing=True
         )
-        logger.info("Scheduled Oddschecker scraper every 60 seconds")
+        logger.info("Scheduled Oddschecker scraper every 45 seconds")
 
         # Cleanup: remove finished races every 2 minutes
         self.scheduler.add_job(
