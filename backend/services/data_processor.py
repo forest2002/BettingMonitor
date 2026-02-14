@@ -108,29 +108,47 @@ class DataProcessor:
 
         event_type_id = event_type['id']
 
-        # Check if event exists (same name, venue, and scheduled time within 5 minutes)
+        # Check if event exists
+        # When venue is available, match by venue + time first (different scrapers
+        # use different event names for the same race, e.g. "Wincanton 14th Feb"
+        # vs "Wincanton 13:35 Betting Odds- Winner").  Venue + time within 5
+        # minutes uniquely identifies a race.
+        event = None
         if odds_data.venue:
-            query = """
+            venue_time_query = """
                 SELECT id, event_type_id, name, venue, scheduled_time, status, metadata
                 FROM events
-                WHERE name = $1
-                AND venue = $2
-                AND ABS(EXTRACT(EPOCH FROM (scheduled_time - $3))) < 300
-                ORDER BY created_at DESC
+                WHERE venue = $1
+                AND ABS(EXTRACT(EPOCH FROM (scheduled_time - $2))) < 300
+                ORDER BY created_at ASC
                 LIMIT 1
             """
-            event = await db.fetch_one(query, odds_data.event_name, odds_data.venue, odds_data.scheduled_time)
-        else:
-            query = """
-                SELECT id, event_type_id, name, venue, scheduled_time, status, metadata
-                FROM events
-                WHERE name = $1
-                AND venue IS NULL
-                AND ABS(EXTRACT(EPOCH FROM (scheduled_time - $3))) < 300
-                ORDER BY created_at DESC
-                LIMIT 1
-            """
-            event = await db.fetch_one(query, odds_data.event_name, odds_data.scheduled_time)
+            event = await db.fetch_one(venue_time_query, odds_data.venue, odds_data.scheduled_time)
+
+        # Fallback: match by exact name + time
+        if not event:
+            if odds_data.venue:
+                query = """
+                    SELECT id, event_type_id, name, venue, scheduled_time, status, metadata
+                    FROM events
+                    WHERE name = $1
+                    AND venue = $2
+                    AND ABS(EXTRACT(EPOCH FROM (scheduled_time - $3))) < 300
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """
+                event = await db.fetch_one(query, odds_data.event_name, odds_data.venue, odds_data.scheduled_time)
+            else:
+                query = """
+                    SELECT id, event_type_id, name, venue, scheduled_time, status, metadata
+                    FROM events
+                    WHERE name = $1
+                    AND venue IS NULL
+                    AND ABS(EXTRACT(EPOCH FROM (scheduled_time - $3))) < 300
+                    ORDER BY created_at DESC
+                    LIMIT 1
+                """
+                event = await db.fetch_one(query, odds_data.event_name, odds_data.scheduled_time)
 
         if event:
             return dict(event)
