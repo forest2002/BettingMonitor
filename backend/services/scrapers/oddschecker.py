@@ -31,6 +31,11 @@ TARGET_BOOKMAKERS = {
     "BD": "Betfred",
     "FR": "Betfred",
     "OE": "10Bet",
+    "BW": "Betway",
+    "VC": "Betvictor",
+    "BV": "Betvictor",
+    "MG": "BetMGM",
+    "BM": "BetMGM",
 }
 
 
@@ -54,6 +59,12 @@ UK_IRISH_VENUES = {
     'winchester', 'windsor', 'wolverhampton', 'worcester', 'yarmouth',
     'york',
 }
+
+# How many races to scrape in parallel
+MAX_CONCURRENT = 5
+
+# Re-discover race links every 10 minutes
+LINK_CACHE_TTL = timedelta(minutes=10)
 
 
 def _make_chrome_options() -> Options:
@@ -86,12 +97,18 @@ class OddscheckerScraper(BookmakerScraper):
 
     Uses a fresh browser session per page to avoid Cloudflare's
     per-session bot detection on subsequent navigations.
+
+    Race links are cached and refreshed every 10 minutes.
+    Only races starting within the next 2 hours are scraped each cycle.
+    Up to 5 races are scraped in parallel for speed.
     """
 
     def __init__(self):
         super().__init__("oddschecker")
         self.base_url = "https://www.oddschecker.com/horse-racing"
-        self.max_races = 60
+        # Link caching
+        self._cached_race_links: List[dict] = []  # [{url, race_time_str, venue_slug}]
+        self._links_fetched_at: Optional[datetime] = None
 
     async def initialize(self):
         """Validate that Chrome driver can launch"""
@@ -110,25 +127,42 @@ class OddscheckerScraper(BookmakerScraper):
         odds_data_list = []
 
         try:
-            # Step 1: get list of race URLs from the landing page
-            race_links = await self._fetch_race_links()
+            # Step 1: refresh race links if cache is stale
+            await self._ensure_race_links()
 
-            if not race_links:
+            if not self._cached_race_links:
                 self.logger.info("No race links found on Oddschecker")
                 return []
 
-            self.logger.info(f"Found {len(race_links)} race links on Oddschecker")
-            race_links = race_links[:self.max_races]
+            # Step 2: filter to races starting within the next 2 hours
+            upcoming = self._filter_upcoming_races()
+            self.logger.info(
+                f"{len(upcoming)} upcoming races (of {len(self._cached_race_links)} cached)"
+            )
 
-            # Step 2: scrape each race with a fresh driver
-            for race_url in race_links:
-                try:
-                    race_odds = await self._scrape_race(race_url)
-                    odds_data_list.extend(race_odds)
-                    await asyncio.sleep(random.uniform(1.0, 2.5))
-                except Exception as e:
-                    self.logger.error(f"Error scraping race {race_url}: {e}")
-                    continue
+            if not upcoming:
+                self.logger.info("No races starting within the next 2 hours")
+                return []
+
+            # Step 3: scrape in parallel with a concurrency limit
+            semaphore = asyncio.Semaphore(MAX_CONCURRENT)
+
+            async def _scrape_with_limit(race_info):
+                async with semaphore:
+                    try:
+                        result = await self._scrape_race(race_info['url'])
+                        await asyncio.sleep(random.uniform(0.5, 1.5))
+                        return result
+                    except Exception as e:
+                        self.logger.error(f"Error scraping race {race_info['url']}: {e}")
+                        return []
+
+            results = await asyncio.gather(
+                *[_scrape_with_limit(r) for r in upcoming]
+            )
+
+            for result in results:
+                odds_data_list.extend(result)
 
         except Exception as e:
             self.logger.error(f"Error during Oddschecker scrape: {e}", exc_info=True)
@@ -138,7 +172,37 @@ class OddscheckerScraper(BookmakerScraper):
         )
         return odds_data_list
 
-    async def _fetch_race_links(self) -> List[str]:
+    async def _ensure_race_links(self):
+        """Refresh race link cache if stale or empty"""
+        now = datetime.now()
+        if (
+            self._cached_race_links
+            and self._links_fetched_at
+            and (now - self._links_fetched_at) < LINK_CACHE_TTL
+        ):
+            return  # cache is fresh
+
+        self.logger.info("Refreshing race link cache from Oddschecker landing page...")
+        links = await self._fetch_race_links()
+        self._cached_race_links = links
+        self._links_fetched_at = now
+        self.logger.info(f"Cached {len(links)} race links")
+
+    def _filter_upcoming_races(self) -> List[dict]:
+        """Return only races starting within the next 2 hours"""
+        now = datetime.now()
+        cutoff = now + timedelta(hours=2)
+        upcoming = []
+
+        for race in self._cached_race_links:
+            race_dt = self._parse_race_time(race['race_time_str'])
+            # Include races that haven't started yet and are within 2 hours
+            if now - timedelta(minutes=5) <= race_dt <= cutoff:
+                upcoming.append(race)
+
+        return upcoming
+
+    async def _fetch_race_links(self) -> List[dict]:
         """Load the landing page in a fresh driver and extract race URLs"""
         driver = _new_driver()
         try:
@@ -150,18 +214,25 @@ class OddscheckerScraper(BookmakerScraper):
             )
 
             race_links = []
+            seen_urls = set()
             for elem in link_elements:
                 href = elem.get_attribute('href')
                 if not href:
                     continue
                 match = re.search(
-                    r'/horse-racing/(?:\d{4}-\d{2}-\d{2}-)?([^/]+)/\d{2}:\d{2}/winner$',
+                    r'/horse-racing/(?:\d{4}-\d{2}-\d{2}-)?([^/]+)/(\d{2}:\d{2})/winner$',
                     href,
                 )
                 if match:
                     venue_slug = match.group(1)
-                    if venue_slug in UK_IRISH_VENUES and href not in race_links:
-                        race_links.append(href)
+                    race_time_str = match.group(2)
+                    if venue_slug in UK_IRISH_VENUES and href not in seen_urls:
+                        seen_urls.add(href)
+                        race_links.append({
+                            'url': href,
+                            'venue_slug': venue_slug,
+                            'race_time_str': race_time_str,
+                        })
 
             return race_links
         except Exception as e:
@@ -195,9 +266,9 @@ class OddscheckerScraper(BookmakerScraper):
                 return []
 
             # Race metadata
-            venue, race_time = self._parse_race_url(race_url)
+            venue, race_time, race_date = self._parse_race_url(race_url)
             race_name = self._get_race_name(driver)
-            scheduled_time = self._parse_race_time(race_time)
+            scheduled_time = self._parse_race_time(race_time, race_date)
             event_name = race_name or f"{venue} {race_time}"
 
             place_terms = self._extract_each_way_terms(driver)
@@ -278,14 +349,22 @@ class OddscheckerScraper(BookmakerScraper):
     def _parse_race_url(self, url: str) -> tuple:
         venue = None
         race_time = ""
-        match = re.search(r'/horse-racing/([^/]+)/(\d{2}:\d{2})', url)
+        race_date = None
+
+        # Try to match URL with date: /horse-racing/2026-02-16-newcastle/15:42/winner
+        match = re.search(r'/horse-racing/(\d{4}-\d{2}-\d{2})-([^/]+)/(\d{2}:\d{2})', url)
         if match:
-            raw_venue = match.group(1)
-            # Strip date prefixes like "2026-02-14-" from venue slugs
-            raw_venue = re.sub(r'^\d{4}-\d{2}-\d{2}-', '', raw_venue)
-            venue = raw_venue.replace('-', ' ').title()
-            race_time = match.group(2)
-        return venue, race_time
+            race_date = match.group(1)  # Extract the date
+            venue = match.group(2).replace('-', ' ').title()
+            race_time = match.group(3)
+        else:
+            # Fall back to URL without date: /horse-racing/newcastle/15:42/winner
+            match = re.search(r'/horse-racing/([^/]+)/(\d{2}:\d{2})', url)
+            if match:
+                venue = match.group(1).replace('-', ' ').title()
+                race_time = match.group(2)
+
+        return venue, race_time, race_date
 
     def _get_race_name(self, driver) -> Optional[str]:
         try:
@@ -298,19 +377,30 @@ class OddscheckerScraper(BookmakerScraper):
             pass
         return None
 
-    def _parse_race_time(self, time_text: str) -> datetime:
+    def _parse_race_time(self, time_text: str, date_text: Optional[str] = None) -> datetime:
         try:
             match = re.search(r'(\d{1,2}):(\d{2})', time_text)
             if match:
                 hour = int(match.group(1))
                 minute = int(match.group(2))
+
+                # If we have an explicit date from the URL, use it
+                if date_text:
+                    date_match = re.match(r'(\d{4})-(\d{2})-(\d{2})', date_text)
+                    if date_match:
+                        year = int(date_match.group(1))
+                        month = int(date_match.group(2))
+                        day = int(date_match.group(3))
+                        return datetime(year, month, day, hour, minute)
+
+                # Otherwise fall back to today/tomorrow logic
                 now = datetime.now()
                 scheduled = datetime(now.year, now.month, now.day, hour, minute)
                 if scheduled < now:
                     scheduled += timedelta(days=1)
                 return scheduled
         except Exception as e:
-            self.logger.warning(f"Failed to parse time '{time_text}': {e}")
+            self.logger.warning(f"Failed to parse time '{time_text}' with date '{date_text}': {e}")
         return datetime.now() + timedelta(hours=1)
 
     def _extract_each_way_terms(self, driver) -> Optional[str]:

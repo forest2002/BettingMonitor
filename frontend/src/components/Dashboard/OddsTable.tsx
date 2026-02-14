@@ -1,3 +1,4 @@
+import { useState, useMemo } from 'react'
 import {
   Table,
   TableBody,
@@ -12,19 +13,61 @@ import {
   Accordion,
   AccordionSummary,
   AccordionDetails,
+  ToggleButtonGroup,
+  ToggleButton,
 } from '@mui/material'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ViewListIcon from '@mui/icons-material/ViewList'
+import ViewModuleIcon from '@mui/icons-material/ViewModule'
 import { useOddsStore } from '../../stores/oddsStore'
-import { Event } from '../../types'
+import { Event, Odds } from '../../types'
+
+type ViewMode = 'list' | 'venue'
 
 export const OddsTable = () => {
   const { events, oddsMap } = useOddsStore()
+  const [viewMode, setViewMode] = useState<ViewMode>('list')
+  const [expandedVenues, setExpandedVenues] = useState<Set<string>>(new Set())
 
-  const formatTime = (dateString: string) => {
+  // Sort events by date first, then time
+  const sortedEvents = useMemo(() => {
+    return [...events].sort((a, b) => {
+      return new Date(a.scheduled_time).getTime() - new Date(b.scheduled_time).getTime()
+    })
+  }, [events])
+
+  // Group events by venue and sort venues alphabetically
+  const eventsByVenue = useMemo(() => {
+    const grouped = new Map<string, Event[]>()
+    sortedEvents.forEach((event) => {
+      const venue = event.venue || 'Unknown Venue'
+      if (!grouped.has(venue)) {
+        grouped.set(venue, [])
+      }
+      grouped.get(venue)!.push(event)
+    })
+
+    // Convert to array, sort alphabetically, then back to Map
+    const sortedEntries = Array.from(grouped.entries()).sort((a, b) =>
+      a[0].localeCompare(b[0])
+    )
+    return new Map(sortedEntries)
+  }, [sortedEvents])
+
+  const formatDateTime = (dateString: string) => {
     const date = new Date(dateString)
     return date.toLocaleString('en-GB', {
+      weekday: 'short',
       day: '2-digit',
-      month: '2-digit',
+      month: 'short',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  }
+
+  const formatTimeOnly = (dateString: string) => {
+    const date = new Date(dateString)
+    return date.toLocaleString('en-GB', {
       hour: '2-digit',
       minute: '2-digit',
     })
@@ -35,112 +78,347 @@ export const OddsTable = () => {
     return eventOdds.filter((odds) => odds.selection_id === selectionId)
   }
 
-  const EventRow = ({ event }: { event: Event }) => {
+  const getOddsByBookmaker = (odds: Odds[]) => {
+    const map: Record<string, Odds> = {}
+    for (const o of odds) {
+      map[o.bookmaker_name] = o
+    }
+    return map
+  }
+
+  const SelectionsTable = ({ event }: { event: Event }) => {
+    if (event.selections.length === 0) {
+      return (
+        <Typography color="text.secondary" fontWeight={500}>
+          No selections available
+        </Typography>
+      )
+    }
+
+    // Get all unique bookmakers for this event
+    const allOdds = event.selections.flatMap((selection) =>
+      getOddsForSelection(event.id, selection.id)
+    )
+    const bookmakerNames = Array.from(new Set(allOdds.map(o => o.bookmaker_name)))
+
+    // Only show these specific bookmakers in alphabetical order
+    const allowedBookmakers = [
+      'Betvictor',
+      'Coral',
+      'Ladbrokes',
+      'Paddy Power',
+      'Sky Bet'
+    ]
+
+    // Filter to only allowed bookmakers that have data
+    const sortedBookmakers = allowedBookmakers.filter(bm => bookmakerNames.includes(bm))
+
+    // Add Betfair Exchange if available (for Back and Lay columns)
+    const hasBetfair = bookmakerNames.includes('Betfair Exchange')
+
+    return (
+      <TableContainer
+        component={Paper}
+        variant="outlined"
+        sx={{
+          borderRadius: 2,
+          border: '1px solid rgba(100, 116, 139, 0.2)',
+        }}
+      >
+        <Table size="small">
+          <TableHead>
+            <TableRow
+              sx={{
+                bgcolor: 'rgba(100, 116, 139, 0.05)',
+              }}
+            >
+              <TableCell sx={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', minWidth: 150 }}>
+                Selection
+              </TableCell>
+              {sortedBookmakers.map(bookmaker => (
+                <TableCell
+                  key={bookmaker}
+                  align="center"
+                  sx={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', minWidth: 90 }}
+                >
+                  {bookmaker}
+                </TableCell>
+              ))}
+              {hasBetfair && (
+                <>
+                  <TableCell align="center" sx={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', minWidth: 90 }}>
+                    Betfair Back
+                  </TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', minWidth: 90 }}>
+                    Betfair Lay
+                  </TableCell>
+                </>
+              )}
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {event.selections.map((selection) => {
+              const selectionOdds = getOddsForSelection(event.id, selection.id)
+              const byBookmaker = getOddsByBookmaker(selectionOdds)
+
+              // Find best price across all displayed bookmakers
+              const allPrices = sortedBookmakers
+                .map(bm => byBookmaker[bm] ? Number(byBookmaker[bm].odds_decimal) : 0)
+              const bestBookmakerPrice = Math.max(...allPrices, 0)
+
+              return (
+                <TableRow
+                  key={selection.id}
+                  sx={{
+                    transition: 'all 0.2s ease',
+                    '&:hover': {
+                      bgcolor: 'rgba(100, 116, 139, 0.05)',
+                    },
+                  }}
+                >
+                  <TableCell>
+                    <Typography fontWeight={700} fontSize="0.95rem" color="text.primary">
+                      {selection.name}
+                    </Typography>
+                  </TableCell>
+
+                  {sortedBookmakers.map(bookmaker => {
+                    const odds = byBookmaker[bookmaker]
+                    const price = odds ? Number(odds.odds_decimal) : 0
+                    const isBest = price === bestBookmakerPrice && bestBookmakerPrice > 0
+
+                    return (
+                      <TableCell key={bookmaker} align="center">
+                        {odds ? (
+                          <Typography
+                            fontWeight={700}
+                            fontSize="0.95rem"
+                            color={isBest ? 'success.main' : 'text.primary'}
+                          >
+                            {Number(odds.odds_decimal).toFixed(2)}
+                          </Typography>
+                        ) : (
+                          <Typography color="text.disabled" fontSize="0.85rem">-</Typography>
+                        )}
+                      </TableCell>
+                    )
+                  })}
+
+                  {hasBetfair && (
+                    <>
+                      <TableCell align="center">
+                        {byBookmaker['Betfair Exchange'] ? (
+                          <Typography fontWeight={700} fontSize="0.95rem" color="primary.main">
+                            {Number(byBookmaker['Betfair Exchange'].odds_decimal).toFixed(2)}
+                          </Typography>
+                        ) : (
+                          <Typography color="text.disabled" fontSize="0.85rem">-</Typography>
+                        )}
+                      </TableCell>
+                      <TableCell align="center">
+                        {byBookmaker['Betfair Exchange']?.place_odds ? (
+                          <Typography fontWeight={700} fontSize="0.95rem" color="error.main">
+                            {Number(byBookmaker['Betfair Exchange'].place_odds).toFixed(2)}
+                          </Typography>
+                        ) : (
+                          <Typography color="text.disabled" fontSize="0.85rem">-</Typography>
+                        )}
+                      </TableCell>
+                    </>
+                  )}
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+    )
+  }
+
+  const EventRow = ({ event, showFullDate = true }: { event: Event; showFullDate?: boolean }) => {
     const hasOdds = oddsMap.has(event.id) && oddsMap.get(event.id)!.length > 0
 
     return (
-      <Accordion key={event.id} defaultExpanded={hasOdds}>
-        <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%' }}>
+      <Accordion
+        key={event.id}
+        defaultExpanded={hasOdds}
+        sx={{
+          mb: 2,
+          borderRadius: '12px !important',
+          overflow: 'hidden',
+          border: '1px solid rgba(100, 116, 139, 0.2)',
+          '&:before': {
+            display: 'none',
+          },
+          boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)',
+          transition: 'all 0.3s ease',
+          '&:hover': {
+            boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.2)',
+          },
+        }}
+      >
+        <AccordionSummary
+          expandIcon={<ExpandMoreIcon />}
+          sx={{
+            background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%)',
+            '&:hover': {
+              background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%)',
+            },
+          }}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%', flexWrap: 'wrap' }}>
             <Chip
               label={event.event_type_name || 'Horse Racing'}
-              color="primary"
               size="small"
+              sx={{
+                bgcolor: 'primary.main',
+                color: 'white',
+                fontWeight: 700,
+                fontSize: '0.75rem',
+                boxShadow: '0 2px 4px rgba(59, 130, 246, 0.3)',
+              }}
             />
-            <Typography variant="h6">{event.name}</Typography>
-            {event.venue && (
-              <Typography variant="body2" color="text.secondary">
-                @ {event.venue}
-              </Typography>
-            )}
-            <Typography variant="body2" color="text.secondary" sx={{ ml: 'auto' }}>
-              {formatTime(event.scheduled_time)}
+            <Typography variant="h6" fontWeight={700} color="text.primary">
+              {event.name}
             </Typography>
+            {event.venue && viewMode === 'list' && (
+              <Chip
+                label={event.venue}
+                size="small"
+                variant="outlined"
+                sx={{
+                  fontWeight: 600,
+                  borderColor: 'rgba(100, 116, 139, 0.3)',
+                }}
+              />
+            )}
+            <Box
+              sx={{
+                ml: 'auto',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 1,
+                bgcolor: 'rgba(100, 116, 139, 0.1)',
+                px: 1.5,
+                py: 0.5,
+                borderRadius: 1,
+              }}
+            >
+              <Typography variant="body2" color="text.secondary" fontWeight={600}>
+                {showFullDate ? formatDateTime(event.scheduled_time) : formatTimeOnly(event.scheduled_time)}
+              </Typography>
+            </Box>
           </Box>
         </AccordionSummary>
-        <AccordionDetails>
-          {event.selections.length === 0 ? (
-            <Typography color="text.secondary">No selections available</Typography>
-          ) : (
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small">
-                <TableHead>
-                  <TableRow>
-                    <TableCell>Selection</TableCell>
-                    <TableCell>Bookmaker</TableCell>
-                    <TableCell align="right">Win Odds</TableCell>
-                    <TableCell align="right">Place Odds</TableCell>
-                    <TableCell align="right">Place Terms</TableCell>
-                    <TableCell align="right">Last Updated</TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {event.selections.map((selection) => {
-                    const selectionOdds = getOddsForSelection(event.id, selection.id)
-
-                    if (selectionOdds.length === 0) {
-                      return (
-                        <TableRow key={selection.id}>
-                          <TableCell>{selection.name}</TableCell>
-                          <TableCell colSpan={5}>
-                            <Typography variant="body2" color="text.secondary">
-                              No odds available
-                            </Typography>
-                          </TableCell>
-                        </TableRow>
-                      )
-                    }
-
-                    return selectionOdds.map((odds, index) => (
-                      <TableRow key={`${selection.id}-${odds.bookmaker_id}`}>
-                        {index === 0 && (
-                          <TableCell rowSpan={selectionOdds.length}>
-                            <Typography fontWeight="medium">{selection.name}</Typography>
-                            {selection.metadata?.rating && (
-                              <Chip
-                                label={`Rating: ${selection.metadata.rating}`}
-                                size="small"
-                                sx={{ mt: 0.5 }}
-                              />
-                            )}
-                          </TableCell>
-                        )}
-                        <TableCell>{odds.bookmaker_name}</TableCell>
-                        <TableCell align="right">
-                          <Typography fontWeight="bold" color="primary">
-                            {odds.odds_decimal.toFixed(2)}
-                          </Typography>
-                        </TableCell>
-                        <TableCell align="right">
-                          {odds.place_odds
-                            ? odds.place_odds.toFixed(2)
-                            : '-'}
-                        </TableCell>
-                        <TableCell align="right">
-                          {odds.place_terms || '-'}
-                        </TableCell>
-                        <TableCell align="right">
-                          <Typography variant="body2" color="text.secondary">
-                            {new Date(odds.scraped_at).toLocaleTimeString('en-GB')}
-                          </Typography>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  })}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
+        <AccordionDetails sx={{ p: 2 }}>
+          <SelectionsTable event={event} />
         </AccordionDetails>
       </Accordion>
     )
   }
 
+  const toggleVenue = (venue: string) => {
+    setExpandedVenues(prev => {
+      const next = new Set(prev)
+      if (next.has(venue)) {
+        next.delete(venue)
+      } else {
+        next.add(venue)
+      }
+      return next
+    })
+  }
+
+  const VenueGroup = ({ venue, events }: { venue: string; events: Event[] }) => {
+    const isExpanded = expandedVenues.has(venue)
+
+    return (
+      <Box sx={{ mb: 3 }}>
+        <Paper
+          sx={{
+            p: 2,
+            mb: 2,
+            background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%)',
+            border: '2px solid rgba(102, 126, 234, 0.3)',
+            borderRadius: 2,
+            cursor: 'pointer',
+            transition: 'all 0.2s ease',
+            '&:hover': {
+              background: 'linear-gradient(135deg, rgba(102, 126, 234, 0.15) 0%, rgba(118, 75, 162, 0.15) 100%)',
+              border: '2px solid rgba(102, 126, 234, 0.5)',
+            },
+          }}
+          onClick={() => toggleVenue(venue)}
+        >
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 2 }}>
+            <ExpandMoreIcon
+              sx={{
+                transform: isExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                transition: 'transform 0.3s ease',
+                color: 'primary.main',
+              }}
+            />
+            <Typography variant="h5" fontWeight={800} color="primary.main">
+              {venue}
+            </Typography>
+            <Chip
+              label={`${events.length} race${events.length !== 1 ? 's' : ''}`}
+              size="small"
+              sx={{
+                fontWeight: 600,
+                bgcolor: 'rgba(102, 126, 234, 0.2)',
+                color: 'primary.main',
+              }}
+            />
+          </Box>
+        </Paper>
+        {isExpanded && events.map((event) => (
+          <EventRow key={event.id} event={event} showFullDate={false} />
+        ))}
+      </Box>
+    )
+  }
+
   return (
     <Box>
-      {events.map((event) => (
-        <EventRow key={event.id} event={event} />
-      ))}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 3 }}>
+        <ToggleButtonGroup
+          value={viewMode}
+          exclusive
+          onChange={(_, newMode) => newMode && setViewMode(newMode)}
+          size="small"
+          sx={{
+            '& .MuiToggleButton-root': {
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 2,
+            },
+          }}
+        >
+          <ToggleButton value="list">
+            <ViewListIcon sx={{ mr: 1 }} fontSize="small" />
+            List View
+          </ToggleButton>
+          <ToggleButton value="venue">
+            <ViewModuleIcon sx={{ mr: 1 }} fontSize="small" />
+            By Venue
+          </ToggleButton>
+        </ToggleButtonGroup>
+      </Box>
+
+      {viewMode === 'list' ? (
+        <Box>
+          {sortedEvents.map((event) => (
+            <EventRow key={event.id} event={event} />
+          ))}
+        </Box>
+      ) : (
+        <Box>
+          {Array.from(eventsByVenue.entries()).map(([venue, venueEvents]) => (
+            <VenueGroup key={venue} venue={venue} events={venueEvents} />
+          ))}
+        </Box>
+      )}
     </Box>
   )
 }

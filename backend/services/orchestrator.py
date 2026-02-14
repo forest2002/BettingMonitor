@@ -78,59 +78,59 @@ class ScraperOrchestrator:
         )
         logger.info("Scheduled Betfair Exchange scraper every 30 seconds")
 
-        # Oddschecker: every 10 minutes (scrapes all UK/Irish race pages)
+        # Oddschecker: every 60 seconds (scrapes all UK/Irish race pages)
         self.scheduler.add_job(
             self._run_scraper,
             'interval',
-            minutes=10,
+            seconds=60,
             args=['oddschecker'],
             id='oddschecker_job',
             replace_existing=True
         )
-        logger.info("Scheduled Oddschecker scraper every 10 minutes")
+        logger.info("Scheduled Oddschecker scraper every 60 seconds")
 
-        # Cleanup: remove finished races every 5 minutes
+        # Cleanup: remove finished races every 2 minutes
         self.scheduler.add_job(
             self._cleanup_old_events,
             'interval',
-            minutes=5,
+            minutes=2,
             id='cleanup_job',
             replace_existing=True
         )
-        logger.info("Scheduled event cleanup every 5 minutes")
+        logger.info("Scheduled event cleanup every 2 minutes")
 
     async def _cleanup_old_events(self):
-        """Delete events (and their selections/odds) that finished more than 30 minutes ago"""
+        """Delete events (and their selections/odds) that finished (past races)"""
         try:
-            # Delete odds for old events
+            # Delete odds for finished events
             delete_odds = """
                 DELETE FROM odds_history
                 WHERE selection_id IN (
                     SELECT s.id FROM selections s
                     JOIN events e ON s.event_id = e.id
-                    WHERE e.scheduled_time < NOW() - INTERVAL '30 minutes'
+                    WHERE e.scheduled_time < NOW()
                 )
             """
             await db.execute(delete_odds)
 
-            # Delete selections for old events
+            # Delete selections for finished events
             delete_selections = """
                 DELETE FROM selections
                 WHERE event_id IN (
                     SELECT id FROM events
-                    WHERE scheduled_time < NOW() - INTERVAL '30 minutes'
+                    WHERE scheduled_time < NOW()
                 )
             """
             await db.execute(delete_selections)
 
-            # Delete old events
+            # Delete finished events
             delete_events = """
                 DELETE FROM events
-                WHERE scheduled_time < NOW() - INTERVAL '30 minutes'
+                WHERE scheduled_time < NOW()
             """
             result = await db.execute(delete_events)
 
-            logger.info("Cleaned up old events")
+            logger.info("Cleaned up finished events")
 
         except Exception as e:
             logger.error(f"Error cleaning up old events: {e}", exc_info=True)
