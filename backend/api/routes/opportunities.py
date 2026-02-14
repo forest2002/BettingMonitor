@@ -14,9 +14,10 @@ async def get_each_way_opportunities(
     hours_ahead: int = Query(default=24, ge=1, le=168)
 ):
     """
-    Get each-way arbitrage opportunities
+    Get each-way profit maximiser opportunities.
 
-    Finds horses where bookmaker place odds > Betfair Exchange lay place odds
+    Finds horses where laying both win and place on Betfair against bookmaker
+    EW odds produces profit >= 0 in all 3 scenarios (win/place/lose).
     """
     try:
         time_limit = datetime.now() + timedelta(hours=hours_ahead)
@@ -90,15 +91,20 @@ async def get_each_way_opportunities(
                 'selection_name': opp['selection_name'],
                 'event_name': opp['event_name'],
                 'bookmaker': opp['bookmaker'],
+                'bookmaker_win_odds': float(opp['bookmaker_win_odds']),
                 'bookmaker_place_odds': float(opp['bookmaker_place_odds']),
-                'betfair_lay_odds': float(opp['betfair_lay_odds']),
+                'betfair_win_lay_odds': float(opp['betfair_win_lay_odds']),
+                'betfair_place_lay_odds': float(opp['betfair_place_lay_odds']),
+                'win_edge': float(opp['win_edge']),
+                'place_edge': float(opp['place_edge']),
+                'total_edge': float(opp['total_edge']),
                 'rating': opp['rating'],
-                'edge': opp['edge'],
-                'expected_value': float(opp['expected_value']),
-                'profit_if_places': float(opp['profit_if_places']),
+                'win_lay_stake': float(opp['win_lay_stake']),
+                'place_lay_stake': float(opp['place_lay_stake']),
                 'profit_if_wins': float(opp['profit_if_wins']),
+                'profit_if_places': float(opp['profit_if_places']),
                 'profit_if_loses': float(opp['profit_if_loses']),
-                'num_places': opp['num_places']
+                'num_places': opp['num_places'],
             })
 
         return {

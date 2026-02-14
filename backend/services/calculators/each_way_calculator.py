@@ -1,47 +1,46 @@
 """
-Each-Way Arbitrage Calculator
+Each-Way Profit Maximiser / Sniper Calculator
 
-Calculates expected value and profit for each-way arbitrage opportunities
-where bookmaker place odds > Betfair Exchange lay odds
+Compares BOTH win AND place components against Betfair Exchange.
+Edge formula: 0.5 * (bookie_win/betfair_win - 1) + 0.5 * (bookie_place/betfair_place - 1)
+Simulates all 3 outcomes (win/place/lose) with proper lay stakes on both markets.
+Only flags as profitable when profit >= 0 in ALL scenarios.
 """
-from decimal import Decimal
+import os
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional, Dict
 import logging
 
 logger = logging.getLogger(__name__)
 
+# Betfair commission rate (configurable via env var, default 2%)
+BETFAIR_COMMISSION = Decimal(os.getenv('BETFAIR_COMMISSION', '0.02'))
+
+
 class EachWayCalculator:
-    """Calculate each-way arbitrage opportunities"""
+    """Calculate each-way profit maximiser opportunities"""
 
     @staticmethod
     def calculate_place_odds(win_odds: Decimal, place_terms: str) -> Optional[Decimal]:
         """
-        Calculate place odds from win odds and place terms
+        Calculate place odds from win odds and place terms.
 
-        Args:
-            win_odds: Decimal odds for the win
-            place_terms: e.g., "1/4", "1/5", "1/3"
-
-        Returns:
-            Place odds as Decimal, or None if can't parse
+        place_odds = (win_odds - 1) * fraction + 1
         """
         try:
             if not place_terms:
                 return None
 
-            # Parse fraction like "1/4" or "1/5"
             if '/' in place_terms:
                 parts = place_terms.split('/')
                 numerator = Decimal(parts[0].strip())
                 denominator = Decimal(parts[1].strip())
                 fraction = numerator / denominator
             else:
-                # Sometimes it's just a decimal like "0.25"
                 fraction = Decimal(place_terms)
 
-            # Place odds = 1 + (win_odds - 1) * fraction
-            place_odds = 1 + (win_odds - 1) * fraction
-            return place_odds.quantize(Decimal('0.01'))
+            place_odds = (win_odds - 1) * fraction + 1
+            return place_odds.quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
 
         except Exception as e:
             logger.warning(f"Failed to calculate place odds: {e}")
@@ -50,32 +49,26 @@ class EachWayCalculator:
     @staticmethod
     def parse_place_terms_details(place_terms: str) -> Dict[str, any]:
         """
-        Parse place terms to extract fraction and number of places
+        Parse place terms to extract fraction and number of places.
 
         Args:
             place_terms: e.g., "1/4 1-2-3", "1/5 1-2-3-4"
-
-        Returns:
-            Dict with 'fraction', 'num_places', 'places_text'
         """
         result = {
             'fraction': None,
-            'num_places': 3,  # Default
+            'num_places': 3,
             'places_text': '1-2-3'
         }
 
         try:
             parts = place_terms.split()
 
-            # First part is usually the fraction
             if parts and '/' in parts[0]:
                 result['fraction'] = parts[0]
 
-            # Look for place indicators
             if len(parts) > 1:
                 places_part = parts[1]
                 result['places_text'] = places_part
-                # Count the dashes to get number of places
                 result['num_places'] = places_part.count('-') + 1
 
         except Exception as e:
@@ -87,98 +80,119 @@ class EachWayCalculator:
     def calculate_each_way_value(
         bookmaker_win_odds: Decimal,
         bookmaker_place_terms: str,
-        betfair_lay_place_odds: Decimal,
-        stake: Decimal = Decimal('100')
+        betfair_win_lay_odds: Decimal,
+        betfair_place_lay_odds: Decimal,
+        stake: Decimal = Decimal('10'),
+        commission: Decimal = BETFAIR_COMMISSION,
     ) -> Dict[str, any]:
         """
-        Calculate the expected value and profit for an each-way arbitrage
+        Full EW profit maximiser calculation.
 
-        Args:
-            bookmaker_win_odds: Bookmaker's win odds (e.g., 8.0)
-            bookmaker_place_terms: e.g., "1/4 1-2-3"
-            betfair_lay_place_odds: Betfair's lay odds for place (e.g., 1.8)
-            stake: Bet stake (default 100)
-
-        Returns:
-            Dict with calculations and opportunity details
+        Compares both win and place components against Betfair,
+        calculates lay stakes for both markets, and simulates all 3 outcomes.
         """
+        Q = Decimal('0.01')
         result = {
             'is_opportunity': False,
+            'bookmaker_win_odds': bookmaker_win_odds,
             'bookmaker_place_odds': None,
-            'betfair_lay_odds': betfair_lay_place_odds,
-            'expected_value': Decimal('0'),
-            'profit_if_places': Decimal('0'),
+            'betfair_win_lay_odds': betfair_win_lay_odds,
+            'betfair_place_lay_odds': betfair_place_lay_odds,
+            'win_edge': Decimal('0'),
+            'place_edge': Decimal('0'),
+            'total_edge': Decimal('0'),
+            'win_lay_stake': Decimal('0'),
+            'place_lay_stake': Decimal('0'),
             'profit_if_wins': Decimal('0'),
+            'profit_if_places': Decimal('0'),
             'profit_if_loses': Decimal('0'),
             'rating': 0,
-            'error': None
+            'error': None,
         }
 
         try:
-            # Parse place terms
             terms = EachWayCalculator.parse_place_terms_details(bookmaker_place_terms)
-
-            # Calculate bookmaker place odds
-            place_odds = EachWayCalculator.calculate_place_odds(
-                bookmaker_win_odds,
-                terms['fraction']
+            bookie_place_odds = EachWayCalculator.calculate_place_odds(
+                bookmaker_win_odds, terms['fraction']
             )
 
-            if not place_odds:
+            if not bookie_place_odds:
                 result['error'] = "Could not calculate place odds"
                 return result
 
-            result['bookmaker_place_odds'] = place_odds
+            result['bookmaker_place_odds'] = bookie_place_odds
+            result['num_places'] = terms['num_places']
 
-            # Check if there's an opportunity
-            # We want bookmaker place odds > Betfair lay odds
-            if place_odds <= betfair_lay_place_odds:
-                return result
+            # --- Edge calculation ---
+            win_edge = bookmaker_win_odds / betfair_win_lay_odds - 1
+            place_edge = bookie_place_odds / betfair_place_lay_odds - 1
+            total_edge = (win_edge + place_edge) / 2
 
-            # Calculate profits for different outcomes
-            ew_stake = stake / 2  # Each-way is split 50/50 between win and place
+            result['win_edge'] = win_edge.quantize(Q)
+            result['place_edge'] = place_edge.quantize(Q)
+            result['total_edge'] = total_edge.quantize(Q)
 
-            # Betfair commission (typically 5%)
-            commission = Decimal('0.05')
+            # --- Lay stake calculation (matched betting) ---
+            half_stake = stake / 2
+            comm_factor = betfair_win_lay_odds - commission
+            comm_factor_place = betfair_place_lay_odds - commission
 
-            # Scenario 1: Horse WINS (both win and place bets pay)
-            win_return = ew_stake * bookmaker_win_odds
-            place_return = ew_stake * place_odds
-            bookmaker_total_return = win_return + place_return
+            win_lay_stake = (half_stake * bookmaker_win_odds) / comm_factor
+            place_lay_stake = (half_stake * bookie_place_odds) / comm_factor_place
 
-            # Lay liability on Betfair place market
-            lay_stake = ew_stake  # Match the place stake
-            lay_liability = lay_stake * (betfair_lay_place_odds - 1)
+            result['win_lay_stake'] = win_lay_stake.quantize(Q)
+            result['place_lay_stake'] = place_lay_stake.quantize(Q)
 
-            profit_if_wins = bookmaker_total_return - stake - lay_liability
+            # --- Profit simulation ---
+            # Win lay liability = win_lay_stake * (betfair_win_lay_odds - 1)
+            # Place lay liability = place_lay_stake * (betfair_place_lay_odds - 1)
+            win_lay_liability = win_lay_stake * (betfair_win_lay_odds - 1)
+            place_lay_liability = place_lay_stake * (betfair_place_lay_odds - 1)
 
-            # Scenario 2: Horse PLACES (only place bet pays)
-            place_return_only = ew_stake * place_odds
-            profit_if_places = place_return_only - stake - lay_liability
+            # Win lay profit = win_lay_stake * (1 - commission)
+            # Place lay profit = place_lay_stake * (1 - commission)
+            win_lay_profit = win_lay_stake * (1 - commission)
+            place_lay_profit = place_lay_stake * (1 - commission)
 
-            # Scenario 3: Horse LOSES (nothing pays, but we win the lay)
-            lay_win = lay_stake * (1 - commission)
-            profit_if_loses = lay_win - stake
+            # Bookmaker returns
+            win_return = half_stake * bookmaker_win_odds  # win part return
+            place_return = half_stake * bookie_place_odds  # place part return
 
-            # Calculate expected value (simplified - assuming equal probability)
-            # In reality, you'd use actual probabilities
-            expected_value = (profit_if_places + profit_if_wins + profit_if_loses) / 3
+            # Scenario 1: Horse WINS (both win and place bets pay at bookie,
+            # both lays lose)
+            profit_if_wins = (
+                win_return + place_return - stake
+                - win_lay_liability - place_lay_liability
+            )
 
-            # Rating: higher is better
-            # Based on the edge (difference between place odds)
-            edge = float(place_odds - betfair_lay_place_odds)
-            rating = int(edge * 100)  # Convert to percentage-like score
+            # Scenario 2: Horse PLACES (only place bet pays at bookie,
+            # win lay wins, place lay loses)
+            profit_if_places = (
+                place_return - stake
+                + win_lay_profit - place_lay_liability
+            )
 
-            result.update({
-                'is_opportunity': True,
-                'expected_value': expected_value.quantize(Decimal('0.01')),
-                'profit_if_places': profit_if_places.quantize(Decimal('0.01')),
-                'profit_if_wins': profit_if_wins.quantize(Decimal('0.01')),
-                'profit_if_loses': profit_if_loses.quantize(Decimal('0.01')),
-                'rating': rating,
-                'edge': float(edge),
-                'num_places': terms['num_places']
-            })
+            # Scenario 3: Horse LOSES (nothing from bookie,
+            # both lays win)
+            profit_if_loses = (
+                win_lay_profit + place_lay_profit - stake
+            )
+
+            result['profit_if_wins'] = profit_if_wins.quantize(Q)
+            result['profit_if_places'] = profit_if_places.quantize(Q)
+            result['profit_if_loses'] = profit_if_loses.quantize(Q)
+
+            # Rating based on total_edge percentage
+            rating = int((total_edge * 100).quantize(Decimal('1'), rounding=ROUND_HALF_UP))
+            result['rating'] = rating
+
+            # Only flag as profitable when profit >= 0 in ALL scenarios
+            all_profitable = (
+                profit_if_wins >= 0
+                and profit_if_places >= 0
+                and profit_if_loses >= 0
+            )
+            result['is_opportunity'] = all_profitable
 
         except Exception as e:
             logger.error(f"Error calculating each-way value: {e}", exc_info=True)
@@ -189,52 +203,58 @@ class EachWayCalculator:
     @staticmethod
     def find_opportunities(selections_with_odds: list) -> list:
         """
-        Find all each-way arbitrage opportunities from a list of selections
+        Find all each-way profit maximiser opportunities.
 
-        Args:
-            selections_with_odds: List of selections with odds from multiple bookmakers
-
-        Returns:
-            List of opportunities sorted by rating (best first)
+        Checks ALL bookmakers against Betfair win lay + place lay data.
+        Requires both "Betfair Exchange" (win) and "Betfair Exchange Place" entries.
         """
         opportunities = []
 
         for selection in selections_with_odds:
-            # Need: bookmaker odds + Betfair lay place odds
-            bookmaker_odds = None
-            betfair_place_odds = None
+            betfair_win_lay = None
+            betfair_place_lay = None
+            bookmaker_odds_list = []
 
             for odds in selection.get('odds', []):
-                if odds['bookmaker_name'] == 'Betfair Exchange':
-                    # Betfair should have place market odds
+                bk = odds['bookmaker_name']
+                if bk == 'Betfair Exchange':
+                    # Win market: place_odds field stores the lay price
                     if odds.get('place_odds'):
-                        betfair_place_odds = Decimal(str(odds['place_odds']))
+                        betfair_win_lay = Decimal(str(odds['place_odds']))
+                elif bk == 'Betfair Exchange Place':
+                    # Place market: place_odds field stores the lay price
+                    if odds.get('place_odds'):
+                        betfair_place_lay = Decimal(str(odds['place_odds']))
                 else:
-                    # Other bookmakers - use the first one we find
-                    if not bookmaker_odds and odds.get('place_terms'):
-                        bookmaker_odds = {
-                            'bookmaker': odds['bookmaker_name'],
+                    # Regular bookmaker with EW terms
+                    if odds.get('place_terms'):
+                        bookmaker_odds_list.append({
+                            'bookmaker': bk,
                             'win_odds': Decimal(str(odds['odds_decimal'])),
-                            'place_terms': odds['place_terms']
-                        }
+                            'place_terms': odds['place_terms'],
+                        })
 
-            # Calculate if we have both
-            if bookmaker_odds and betfair_place_odds:
+            # Need both Betfair win and place lay data
+            if not betfair_win_lay or not betfair_place_lay:
+                continue
+
+            # Check ALL bookmakers, not just the first
+            for bk_odds in bookmaker_odds_list:
                 calc = EachWayCalculator.calculate_each_way_value(
-                    bookmaker_odds['win_odds'],
-                    bookmaker_odds['place_terms'],
-                    betfair_place_odds
+                    bookmaker_win_odds=bk_odds['win_odds'],
+                    bookmaker_place_terms=bk_odds['place_terms'],
+                    betfair_win_lay_odds=betfair_win_lay,
+                    betfair_place_lay_odds=betfair_place_lay,
                 )
 
                 if calc['is_opportunity']:
                     opportunities.append({
                         'selection_name': selection['name'],
                         'event_name': selection['event_name'],
-                        'bookmaker': bookmaker_odds['bookmaker'],
-                        **calc
+                        'bookmaker': bk_odds['bookmaker'],
+                        **calc,
                     })
 
-        # Sort by rating (best opportunities first)
+        # Sort by rating (best first)
         opportunities.sort(key=lambda x: x['rating'], reverse=True)
-
         return opportunities

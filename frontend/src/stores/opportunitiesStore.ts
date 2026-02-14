@@ -6,13 +6,18 @@ interface Opportunity {
   selection_name: string
   event_name: string
   bookmaker: string
+  bookmaker_win_odds: number
   bookmaker_place_odds: number
-  betfair_lay_odds: number
+  betfair_win_lay_odds: number
+  betfair_place_lay_odds: number
+  win_edge: number
+  place_edge: number
+  total_edge: number
   rating: number
-  edge: number
-  expected_value: number
-  profit_if_places: number
+  win_lay_stake: number
+  place_lay_stake: number
   profit_if_wins: number
+  profit_if_places: number
   profit_if_loses: number
   num_places: number
 }
