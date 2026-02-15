@@ -100,37 +100,63 @@ class ScraperOrchestrator:
         logger.info("Scheduled event cleanup every 2 minutes")
 
     async def _cleanup_old_events(self):
-        """Delete events (and their selections/odds) that finished (past races)"""
+        """Delete events (and their selections/odds) that have finished.
+
+        A race is considered finished if:
+        1. Its scheduled_time has passed, OR
+        2. It is still 'upcoming' but has had no fresh odds in the last
+           30 minutes (stale / wrongly-dated event)
+        """
         try:
-            # Delete odds for finished events
+            # First, mark stale events as completed — these are events still
+            # flagged 'upcoming' but with no recent odds, which means the race
+            # has already run (common when the stored scheduled_time is wrong).
+            mark_stale = """
+                UPDATE events SET status = 'completed'
+                WHERE status = 'upcoming'
+                AND id NOT IN (
+                    SELECT DISTINCT e.id
+                    FROM events e
+                    JOIN selections s ON s.event_id = e.id
+                    JOIN odds_history oh ON oh.selection_id = s.id
+                    WHERE oh.scraped_at > NOW() - INTERVAL '30 minutes'
+                )
+                AND created_at < NOW() - INTERVAL '30 minutes'
+            """
+            await db.execute(mark_stale)
+
+            # Delete odds for finished / completed events
             delete_odds = """
                 DELETE FROM odds_history
                 WHERE selection_id IN (
                     SELECT s.id FROM selections s
                     JOIN events e ON s.event_id = e.id
                     WHERE e.scheduled_time < NOW()
+                       OR e.status = 'completed'
                 )
             """
             await db.execute(delete_odds)
 
-            # Delete selections for finished events
+            # Delete selections for finished / completed events
             delete_selections = """
                 DELETE FROM selections
                 WHERE event_id IN (
                     SELECT id FROM events
                     WHERE scheduled_time < NOW()
+                       OR status = 'completed'
                 )
             """
             await db.execute(delete_selections)
 
-            # Delete finished events
+            # Delete finished / completed events
             delete_events = """
                 DELETE FROM events
                 WHERE scheduled_time < NOW()
+                   OR status = 'completed'
             """
-            result = await db.execute(delete_events)
+            await db.execute(delete_events)
 
-            logger.info("Cleaned up finished events")
+            logger.info("Cleaned up finished and stale events")
 
         except Exception as e:
             logger.error(f"Error cleaning up old events: {e}", exc_info=True)
