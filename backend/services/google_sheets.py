@@ -92,12 +92,14 @@ def append_opportunities(opportunities: List[Dict]) -> None:
     if not opportunities:
         return
 
-    # Filter to only new opportunities
+    # Filter to only new opportunities (deduplicate within batch AND across session)
     new_opps = []
+    seen_in_batch = set()
     for opp in opportunities:
         key = _opp_key(opp)
-        if key not in _appended_keys:
+        if key not in _appended_keys and key not in seen_in_batch:
             new_opps.append(opp)
+            seen_in_batch.add(key)
 
     if not new_opps:
         return
