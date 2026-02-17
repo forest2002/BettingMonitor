@@ -17,39 +17,78 @@ import {
   Grid,
   Tooltip,
   IconButton,
+  ToggleButtonGroup,
+  ToggleButton,
+  Button,
 } from '@mui/material'
 import InfoIcon from '@mui/icons-material/Info'
 import TrendingUpIcon from '@mui/icons-material/TrendingUp'
-import { useOpportunitiesStore } from '../../stores/opportunitiesStore'
+import HistoryIcon from '@mui/icons-material/History'
+import DeleteOutlineIcon from '@mui/icons-material/DeleteOutline'
+import RefreshIcon from '@mui/icons-material/Refresh'
+import OpenInNewIcon from '@mui/icons-material/OpenInNew'
+import { useOpportunitiesStore, Opportunity, HistoricalOpportunity, BookmakerEntry } from '../../stores/opportunitiesStore'
+
+type ViewMode = 'live' | 'history'
 
 export const OpportunitiesPanel = () => {
-  const { opportunities, isLoading, error, fetchOpportunities, lastFetch } =
+  const { opportunities, history, isLoading, error, fetchOpportunities, clearHistory, lastFetch } =
     useOpportunitiesStore()
-  const [hasShownAlert, setHasShownAlert] = useState(false)
+  const [alertedKeys, setAlertedKeys] = useState<Set<string>>(new Set())
+  const [viewMode, setViewMode] = useState<ViewMode>('live')
+  const [sheetUrl, setSheetUrl] = useState<string | null>(null)
+
+  const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
   useEffect(() => {
-    fetchOpportunities(5) // Minimum rating of 5
+    fetchOpportunities(4) // Minimum rating of 5
 
     // Refresh every 30 seconds
     const interval = setInterval(() => {
-      fetchOpportunities(5)
+      fetchOpportunities(4)
     }, 30000)
+
+    // Fetch Google Sheet URL
+    fetch(`${API_BASE_URL}/opportunities/sheet-url`)
+      .then(res => res.json())
+      .then(data => { if (data.url) setSheetUrl(data.url) })
+      .catch(() => {})
 
     return () => clearInterval(interval)
   }, [])
 
-  // Alert for new high-value opportunities
+  // Alert for new high-value opportunities (re-triggers for each new one)
   useEffect(() => {
     const highValueOpps = opportunities.filter((opp) => opp.rating >= 20)
-    if (highValueOpps.length > 0 && !hasShownAlert) {
-      if ('Notification' in window && Notification.permission === 'granted') {
-        new Notification('High Value Opportunity!', {
-          body: `${highValueOpps[0].selection_name} - Rating ${highValueOpps[0].rating}%`,
-          icon: '/favicon.ico',
-        })
+    const newAlerts: string[] = []
+    for (const opp of highValueOpps) {
+      const key = `${opp.selection_name}:${opp.event_name}`
+      if (!alertedKeys.has(key)) {
+        newAlerts.push(key)
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('High Value Opportunity!', {
+            body: `${opp.selection_name} - Rating ${opp.rating}%`,
+            icon: '/favicon.ico',
+          })
+        }
       }
-      setHasShownAlert(true)
     }
+    if (newAlerts.length > 0) {
+      setAlertedKeys((prev) => {
+        const next = new Set(prev)
+        newAlerts.forEach((k) => next.add(k))
+        return next
+      })
+    }
+    // Clean up keys for opportunities that no longer exist
+    const currentKeys = new Set(
+      opportunities.map((opp) => `${opp.selection_name}:${opp.event_name}`)
+    )
+    setAlertedKeys((prev) => {
+      const pruned = new Set([...prev].filter((k) => currentKeys.has(k)))
+      if (pruned.size !== prev.size) return pruned
+      return prev
+    })
   }, [opportunities])
 
   const getRatingColor = (rating: number) => {
@@ -72,6 +111,38 @@ export const OpportunitiesPanel = () => {
     return `${(value * 100).toFixed(1)}%`
   }
 
+  const formatRaceInfo = (venue: string | null, scheduledTime: string | null) => {
+    if (!venue && !scheduledTime) return null
+    const parts: string[] = []
+    if (venue) parts.push(venue)
+    if (scheduledTime) {
+      const d = new Date(scheduledTime)
+      parts.push(d.toLocaleString('en-GB', { hour: '2-digit', minute: '2-digit' }))
+      parts.push(d.toLocaleString('en-GB', { day: 'numeric', month: 'short' }))
+    }
+    return parts.join(' - ')
+  }
+
+  const formatTime = (iso: string) => {
+    const d = new Date(iso)
+    return d.toLocaleString('en-GB', {
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  }
+
+  const formatDateTime = (iso: string) => {
+    const d = new Date(iso)
+    return d.toLocaleString('en-GB', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    })
+  }
+
   if (isLoading && opportunities.length === 0) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
@@ -88,6 +159,11 @@ export const OpportunitiesPanel = () => {
   const totalEV = opportunities.reduce(
     (sum, opp) => sum + opp.profit_if_wins + opp.profit_if_places + opp.profit_if_loses,
     0
+  )
+
+  // Determine which history entries are still live (by selection+event)
+  const liveKeys = new Set(
+    opportunities.map((opp) => `${opp.selection_name}::${opp.event_name}`)
   )
 
   const headerCellSx = { color: 'white', fontWeight: 700, fontSize: '0.75rem', whiteSpace: 'nowrap' as const }
@@ -197,324 +273,460 @@ export const OpportunitiesPanel = () => {
         </Grid>
       </Grid>
 
-      {/* Opportunities Table */}
-      {opportunities.length === 0 ? (
-        <Alert
-          severity="info"
-          icon={<TrendingUpIcon />}
+      {/* Live / History Toggle + Refresh */}
+      <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', gap: 2, mb: 3 }}>
+        <ToggleButtonGroup
+          value={viewMode}
+          exclusive
+          onChange={(_, v) => v && setViewMode(v)}
+          size="small"
           sx={{
-            borderRadius: 2,
-            border: '1px solid rgba(59, 130, 246, 0.3)',
-            bgcolor: 'rgba(59, 130, 246, 0.05)',
-            '& .MuiAlert-icon': {
-              color: 'primary.main',
+            '& .MuiToggleButton-root': {
+              textTransform: 'none',
+              fontWeight: 600,
+              px: 3,
+              '&.Mui-selected': {
+                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+                color: '#fff',
+                '&:hover': {
+                  background: 'linear-gradient(135deg, #5a6fd6 0%, #6a4296 100%)',
+                },
+              },
             },
           }}
         >
-          No each-way profit maximiser opportunities found at the moment. The system is monitoring odds continuously.
-        </Alert>
-      ) : (
-        <>
-          <Alert
-            severity="success"
+          <ToggleButton value="live">
+            <TrendingUpIcon sx={{ mr: 1 }} fontSize="small" />
+            Live
+          </ToggleButton>
+          <ToggleButton value="history">
+            <HistoryIcon sx={{ mr: 1 }} fontSize="small" />
+            History ({history.length})
+          </ToggleButton>
+        </ToggleButtonGroup>
+        <Tooltip title="Refresh now">
+          <IconButton
+            onClick={() => fetchOpportunities(4)}
+            disabled={isLoading}
             sx={{
-              mb: 3,
-              borderRadius: 2,
-              border: '1px solid rgba(16, 185, 129, 0.3)',
-              bgcolor: 'rgba(16, 185, 129, 0.05)',
-              '& .MuiAlert-icon': {
-                color: 'success.main',
+              border: '1px solid rgba(100, 116, 139, 0.3)',
+              '&:hover': {
+                bgcolor: 'rgba(102, 126, 234, 0.1)',
+                borderColor: 'primary.main',
               },
             }}
           >
-            <strong>{opportunities.length} opportunities found!</strong> All shown opportunities are profitable (profit &gt;= 0) in every scenario (win, place, lose).
-          </Alert>
-
-          <TableContainer
-            component={Paper}
+            <RefreshIcon
+              fontSize="small"
+              sx={{
+                animation: isLoading ? 'spin 1s linear infinite' : 'none',
+                '@keyframes spin': {
+                  '0%': { transform: 'rotate(0deg)' },
+                  '100%': { transform: 'rotate(360deg)' },
+                },
+              }}
+            />
+          </IconButton>
+        </Tooltip>
+        {sheetUrl && (
+          <Button
+            variant="outlined"
+            size="small"
+            href={sheetUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            startIcon={<OpenInNewIcon />}
             sx={{
-              borderRadius: 3,
-              overflow: 'auto',
-              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.2), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+              textTransform: 'none',
+              fontWeight: 600,
+              borderColor: '#4caf50',
+              color: '#4caf50',
+              '&:hover': {
+                borderColor: '#388e3c',
+                bgcolor: 'rgba(76, 175, 80, 0.08)',
+              },
             }}
           >
-            <Table size="small">
-              <TableHead>
-                <TableRow
-                  sx={{
-                    background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                    '& .MuiTableCell-root': {
-                      borderBottom: 'none',
-                    },
-                  }}
-                >
-                  <TableCell sx={headerCellSx}>RATING</TableCell>
-                  <TableCell sx={headerCellSx}>HORSE</TableCell>
-                  <TableCell sx={headerCellSx}>RACE</TableCell>
-                  <TableCell sx={headerCellSx}>BOOKMAKER</TableCell>
-                  <TableCell sx={headerCellSx} align="right">BOOKIE WIN</TableCell>
-                  <TableCell sx={headerCellSx} align="right">BOOKIE PLACE</TableCell>
-                  <TableCell sx={headerCellSx} align="right">BF WIN LAY</TableCell>
-                  <TableCell sx={headerCellSx} align="right">BF PLACE LAY</TableCell>
-                  <TableCell sx={headerCellSx} align="right">WIN EDGE</TableCell>
-                  <TableCell sx={headerCellSx} align="right">PLACE EDGE</TableCell>
-                  <TableCell sx={headerCellSx} align="right">TOTAL EDGE</TableCell>
-                  <TableCell sx={headerCellSx} align="center">
-                    PROFIT (W|P|L)
-                    <Tooltip title="Profit if horse: Wins | Places | Loses">
-                      <IconButton size="small" sx={{ color: 'rgba(255, 255, 255, 0.9)', ml: 0.5 }}>
-                        <InfoIcon fontSize="small" />
-                      </IconButton>
-                    </Tooltip>
-                  </TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {opportunities.map((opp, index) => (
-                  <TableRow
-                    key={index}
-                    sx={{
-                      backgroundColor:
-                        opp.rating >= 20
-                          ? 'rgba(16, 185, 129, 0.08)'
-                          : opp.rating >= 10
-                          ? 'rgba(245, 158, 11, 0.08)'
-                          : 'inherit',
-                      borderLeft:
-                        opp.rating >= 20
-                          ? '4px solid #10b981'
-                          : opp.rating >= 10
-                          ? '4px solid #f59e0b'
-                          : '4px solid transparent',
-                      transition: 'all 0.3s ease',
-                      '&:hover': {
-                        backgroundColor:
-                          opp.rating >= 20
-                            ? 'rgba(16, 185, 129, 0.15)'
-                            : opp.rating >= 10
-                            ? 'rgba(245, 158, 11, 0.15)'
-                            : 'rgba(100, 116, 139, 0.1)',
-                        transform: 'scale(1.01)',
-                        boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.2)',
-                      },
-                    }}
-                  >
-                    {/* Rating */}
-                    <TableCell>
-                      <Chip
-                        label={`${opp.rating}% ${getRatingLabel(opp.rating)}`}
-                        sx={{
-                          backgroundColor: getRatingColor(opp.rating),
-                          color: 'white',
-                          fontWeight: 700,
-                          fontSize: '0.75rem',
-                          letterSpacing: '0.02em',
-                          boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
-                          border: '1px solid rgba(255, 255, 255, 0.2)',
-                        }}
-                      />
-                    </TableCell>
+            Google Sheet
+          </Button>
+        )}
+      </Box>
 
-                    {/* Horse Name */}
-                    <TableCell>
-                      <Typography fontWeight={700} fontSize="0.9rem" color="text.primary">
-                        {opp.selection_name}
-                      </Typography>
-                    </TableCell>
+      {viewMode === 'live' && <LiveOpportunities
+        opportunities={opportunities}
+        lastFetch={lastFetch}
+        headerCellSx={headerCellSx}
+        getRatingColor={getRatingColor}
+        getRatingLabel={getRatingLabel}
+        formatCurrency={formatCurrency}
+        formatEdge={formatEdge}
+        formatRaceInfo={formatRaceInfo}
+      />}
 
-                    {/* Race */}
-                    <TableCell>
-                      <Typography variant="body2" color="text.secondary" fontWeight={500}>
-                        {opp.event_name}
-                      </Typography>
-                    </TableCell>
-
-                    {/* Bookmaker */}
-                    <TableCell>
-                      <Typography variant="body2" fontWeight={600} color="text.primary">
-                        {opp.bookmaker}
-                      </Typography>
-                      <Chip
-                        label={`${opp.num_places} places`}
-                        size="small"
-                        sx={{
-                          height: 20,
-                          fontSize: '0.7rem',
-                          mt: 0.5,
-                          bgcolor: 'rgba(102, 126, 234, 0.15)',
-                          color: 'primary.light',
-                          fontWeight: 600,
-                        }}
-                      />
-                    </TableCell>
-
-                    {/* Bookie Win Odds */}
-                    <TableCell align="right">
-                      <Typography fontWeight={700} fontSize="0.95rem" color="text.primary">
-                        {opp.bookmaker_win_odds.toFixed(2)}
-                      </Typography>
-                    </TableCell>
-
-                    {/* Bookie Place Odds */}
-                    <TableCell align="right">
-                      <Typography fontWeight={700} fontSize="0.95rem" color="success.main">
-                        {opp.bookmaker_place_odds.toFixed(2)}
-                      </Typography>
-                    </TableCell>
-
-                    {/* Betfair Win Lay */}
-                    <TableCell align="right">
-                      <Typography fontWeight={700} fontSize="0.95rem" color="text.primary">
-                        {opp.betfair_win_lay_odds.toFixed(2)}
-                      </Typography>
-                    </TableCell>
-
-                    {/* Betfair Place Lay */}
-                    <TableCell align="right">
-                      <Typography fontWeight={700} fontSize="0.95rem" color="text.primary">
-                        {opp.betfair_place_lay_odds.toFixed(2)}
-                      </Typography>
-                    </TableCell>
-
-                    {/* Win Edge */}
-                    <TableCell align="right">
-                      <Chip
-                        label={formatEdge(opp.win_edge)}
-                        size="small"
-                        sx={{
-                          bgcolor: opp.win_edge >= 0 ? 'success.main' : 'error.main',
-                          color: 'white',
-                          fontWeight: 700,
-                          fontSize: '0.75rem',
-                        }}
-                      />
-                    </TableCell>
-
-                    {/* Place Edge */}
-                    <TableCell align="right">
-                      <Chip
-                        label={formatEdge(opp.place_edge)}
-                        size="small"
-                        sx={{
-                          bgcolor: opp.place_edge >= 0 ? 'success.main' : 'error.main',
-                          color: 'white',
-                          fontWeight: 700,
-                          fontSize: '0.75rem',
-                        }}
-                      />
-                    </TableCell>
-
-                    {/* Total Edge */}
-                    <TableCell align="right">
-                      <Chip
-                        label={formatEdge(opp.total_edge)}
-                        size="small"
-                        sx={{
-                          bgcolor: 'success.main',
-                          color: 'white',
-                          fontWeight: 700,
-                          fontSize: '0.8rem',
-                          boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)',
-                        }}
-                      />
-                    </TableCell>
-
-                    {/* Profit Scenarios */}
-                    <TableCell align="center">
-                      <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center', flexWrap: 'wrap' }}>
-                        <Tooltip title="If horse WINS" arrow>
-                          <Chip
-                            label={formatCurrency(opp.profit_if_wins)}
-                            size="small"
-                            sx={{
-                              backgroundColor: opp.profit_if_wins >= 0 ? '#10b981' : '#ef4444',
-                              color: 'white',
-                              fontWeight: 700,
-                              fontSize: '0.7rem',
-                              boxShadow: opp.profit_if_wins >= 0
-                                ? '0 2px 4px rgba(16, 185, 129, 0.4)'
-                                : '0 2px 4px rgba(239, 68, 68, 0.4)',
-                              border: '1px solid rgba(255, 255, 255, 0.2)',
-                            }}
-                          />
-                        </Tooltip>
-                        <Tooltip title="If horse PLACES" arrow>
-                          <Chip
-                            label={formatCurrency(opp.profit_if_places)}
-                            size="small"
-                            sx={{
-                              backgroundColor: opp.profit_if_places >= 0 ? '#10b981' : '#ef4444',
-                              color: 'white',
-                              fontWeight: 700,
-                              fontSize: '0.7rem',
-                              boxShadow: opp.profit_if_places >= 0
-                                ? '0 2px 4px rgba(16, 185, 129, 0.4)'
-                                : '0 2px 4px rgba(239, 68, 68, 0.4)',
-                              border: '1px solid rgba(255, 255, 255, 0.2)',
-                            }}
-                          />
-                        </Tooltip>
-                        <Tooltip title="If horse LOSES" arrow>
-                          <Chip
-                            label={formatCurrency(opp.profit_if_loses)}
-                            size="small"
-                            sx={{
-                              backgroundColor: opp.profit_if_loses >= 0 ? '#10b981' : '#ef4444',
-                              color: 'white',
-                              fontWeight: 700,
-                              fontSize: '0.7rem',
-                              boxShadow: opp.profit_if_loses >= 0
-                                ? '0 2px 4px rgba(16, 185, 129, 0.4)'
-                                : '0 2px 4px rgba(239, 68, 68, 0.4)',
-                              border: '1px solid rgba(255, 255, 255, 0.2)',
-                            }}
-                          />
-                        </Tooltip>
-                      </Box>
-                      <Typography
-                        variant="caption"
-                        color="text.secondary"
-                        sx={{ mt: 0.5, fontWeight: 500, fontSize: '0.65rem' }}
-                      >
-                        Win | Place | Lose
-                      </Typography>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </TableContainer>
-
-          {lastFetch && (
-            <Box
-              sx={{
-                mt: 2,
-                p: 2,
-                borderRadius: 2,
-                bgcolor: 'rgba(100, 116, 139, 0.05)',
-                border: '1px solid rgba(100, 116, 139, 0.1)',
-              }}
-            >
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 1 }}
-              >
-                <Box
-                  sx={{
-                    width: 6,
-                    height: 6,
-                    borderRadius: '50%',
-                    bgcolor: 'success.main',
-                    animation: 'pulse 2s ease-in-out infinite',
-                  }}
-                />
-                Last updated: {lastFetch.toLocaleTimeString()}
-              </Typography>
-            </Box>
-          )}
-        </>
-      )}
+      {viewMode === 'history' && <HistoryTable
+        history={history}
+        liveKeys={liveKeys}
+        headerCellSx={headerCellSx}
+        getRatingColor={getRatingColor}
+        getRatingLabel={getRatingLabel}
+        formatCurrency={formatCurrency}
+        formatEdge={formatEdge}
+        formatTime={formatTime}
+        formatDateTime={formatDateTime}
+        formatRaceInfo={formatRaceInfo}
+        onClear={clearHistory}
+      />}
     </Box>
   )
 }
+
+/* ─── Live Opportunities Table ─── */
+
+interface LiveProps {
+  opportunities: Opportunity[]
+  lastFetch: Date | null
+  headerCellSx: Record<string, any>
+  getRatingColor: (r: number) => string
+  getRatingLabel: (r: number) => string
+  formatCurrency: (v: number) => string
+  formatEdge: (v: number) => string
+  formatRaceInfo: (venue: string | null, scheduledTime: string | null) => string | null
+}
+
+const LiveOpportunities = ({
+  opportunities, lastFetch, headerCellSx,
+  getRatingColor, getRatingLabel, formatCurrency, formatEdge, formatRaceInfo,
+}: LiveProps) => {
+  if (opportunities.length === 0) {
+    return (
+      <Alert
+        severity="info"
+        icon={<TrendingUpIcon />}
+        sx={{
+          borderRadius: 2,
+          border: '1px solid rgba(59, 130, 246, 0.3)',
+          bgcolor: 'rgba(59, 130, 246, 0.05)',
+          '& .MuiAlert-icon': { color: 'primary.main' },
+        }}
+      >
+        No each-way profit maximiser opportunities found at the moment. The system is monitoring odds continuously.
+      </Alert>
+    )
+  }
+
+  return (
+    <>
+      <Alert
+        severity="success"
+        sx={{
+          mb: 3, borderRadius: 2,
+          border: '1px solid rgba(16, 185, 129, 0.3)',
+          bgcolor: 'rgba(16, 185, 129, 0.05)',
+          '& .MuiAlert-icon': { color: 'success.main' },
+        }}
+      >
+        <strong>{opportunities.length} opportunities found!</strong> All shown opportunities are profitable (profit &gt;= 0) in every scenario (win, place, lose).
+      </Alert>
+
+      <TableContainer
+        component={Paper}
+        sx={{
+          borderRadius: 3, overflow: 'auto',
+          boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.2), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+        }}
+      >
+        <Table size="small">
+          <TableHead>
+            <TableRow sx={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', '& .MuiTableCell-root': { borderBottom: 'none' } }}>
+              <TableCell sx={headerCellSx}>RATING</TableCell>
+              <TableCell sx={headerCellSx}>HORSE</TableCell>
+              <TableCell sx={headerCellSx}>RACE</TableCell>
+              <TableCell sx={headerCellSx}>BOOKMAKER</TableCell>
+              <TableCell sx={headerCellSx} align="right">BOOKIE WIN</TableCell>
+              <TableCell sx={headerCellSx} align="right">BOOKIE PLACE</TableCell>
+              <TableCell sx={headerCellSx} align="right">BF WIN LAY</TableCell>
+              <TableCell sx={headerCellSx} align="right">BF PLACE LAY</TableCell>
+              <TableCell sx={headerCellSx} align="right">WIN EDGE</TableCell>
+              <TableCell sx={headerCellSx} align="right">PLACE EDGE</TableCell>
+              <TableCell sx={headerCellSx} align="right">TOTAL EDGE</TableCell>
+              <TableCell sx={headerCellSx} align="center">
+                PROFIT (W|P|L)
+                <Tooltip title="Profit if horse: Wins | Places | Loses">
+                  <IconButton size="small" sx={{ color: 'rgba(255, 255, 255, 0.9)', ml: 0.5 }}>
+                    <InfoIcon fontSize="small" />
+                  </IconButton>
+                </Tooltip>
+              </TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {opportunities.map((opp, index) => (
+              <OpportunityRow key={index} opp={opp} getRatingColor={getRatingColor} getRatingLabel={getRatingLabel} formatCurrency={formatCurrency} formatEdge={formatEdge} formatRaceInfo={formatRaceInfo} />
+            ))}
+          </TableBody>
+        </Table>
+      </TableContainer>
+
+      {lastFetch && (
+        <Box sx={{ mt: 2, p: 2, borderRadius: 2, bgcolor: 'rgba(100, 116, 139, 0.05)', border: '1px solid rgba(100, 116, 139, 0.1)' }}>
+          <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 500, display: 'flex', alignItems: 'center', gap: 1 }}>
+            <Box sx={{ width: 6, height: 6, borderRadius: '50%', bgcolor: 'success.main', animation: 'pulse 2s ease-in-out infinite' }} />
+            Last updated: {lastFetch.toLocaleTimeString()}
+          </Typography>
+        </Box>
+      )}
+    </>
+  )
+}
+
+/* ─── Shared Opportunity Row ─── */
+
+interface RowProps {
+  opp: Opportunity
+  getRatingColor: (r: number) => string
+  getRatingLabel: (r: number) => string
+  formatCurrency: (v: number) => string
+  formatEdge: (v: number) => string
+  formatRaceInfo: (venue: string | null, scheduledTime: string | null) => string | null
+}
+
+const OpportunityRow = ({ opp, getRatingColor, getRatingLabel, formatCurrency, formatEdge, formatRaceInfo }: RowProps) => (
+  <TableRow
+    sx={{
+      backgroundColor: opp.rating >= 20 ? 'rgba(16, 185, 129, 0.08)' : opp.rating >= 10 ? 'rgba(245, 158, 11, 0.08)' : 'inherit',
+      borderLeft: opp.rating >= 20 ? '4px solid #10b981' : opp.rating >= 10 ? '4px solid #f59e0b' : '4px solid transparent',
+      transition: 'all 0.3s ease',
+      '&:hover': {
+        backgroundColor: opp.rating >= 20 ? 'rgba(16, 185, 129, 0.15)' : opp.rating >= 10 ? 'rgba(245, 158, 11, 0.15)' : 'rgba(100, 116, 139, 0.1)',
+        transform: 'scale(1.01)',
+        boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.2)',
+      },
+    }}
+  >
+    <TableCell>
+      <Chip label={`${opp.rating}% ${getRatingLabel(opp.rating)}`} sx={{ backgroundColor: getRatingColor(opp.rating), color: 'white', fontWeight: 700, fontSize: '0.75rem', letterSpacing: '0.02em', boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)', border: '1px solid rgba(255, 255, 255, 0.2)' }} />
+    </TableCell>
+    <TableCell><Typography fontWeight={700} fontSize="0.9rem" color="text.primary">{opp.selection_name}</Typography></TableCell>
+    <TableCell><Typography variant="body2" color="text.secondary" fontWeight={500}>{formatRaceInfo(opp.venue, opp.scheduled_time) || opp.event_name}</Typography></TableCell>
+    <TableCell>
+      <Box sx={{ display: 'flex', alignItems: 'center' }}>
+        <Typography variant="body2" fontWeight={600} color="text.primary">{opp.bookmaker}</Typography>
+        {opp.is_fair_odds && <Chip label="FO" size="small" variant="outlined" sx={{ color: '#f59e0b', borderColor: '#f59e0b', fontWeight: 700, fontSize: '0.65rem', height: 20, ml: 0.5 }} />}
+      </Box>
+      <Chip label={`${opp.num_places} places`} size="small" sx={{ height: 20, fontSize: '0.7rem', mt: 0.5, bgcolor: 'rgba(102, 126, 234, 0.15)', color: 'primary.light', fontWeight: 600 }} />
+    </TableCell>
+    <TableCell align="right"><Typography fontWeight={700} fontSize="0.95rem" color="text.primary">{opp.bookmaker_win_odds.toFixed(2)}</Typography></TableCell>
+    <TableCell align="right"><Typography fontWeight={700} fontSize="0.95rem" color="success.main">{opp.bookmaker_place_odds.toFixed(2)}</Typography></TableCell>
+    <TableCell align="right"><Typography fontWeight={700} fontSize="0.95rem" color="text.primary">{opp.betfair_win_lay_odds.toFixed(2)}</Typography></TableCell>
+    <TableCell align="right"><Typography fontWeight={700} fontSize="0.95rem" color="text.primary">{opp.betfair_place_lay_odds.toFixed(2)}</Typography></TableCell>
+    <TableCell align="right"><Chip label={formatEdge(opp.win_edge)} size="small" sx={{ bgcolor: opp.win_edge >= 0 ? 'success.main' : 'error.main', color: 'white', fontWeight: 700, fontSize: '0.75rem' }} /></TableCell>
+    <TableCell align="right"><Chip label={formatEdge(opp.place_edge)} size="small" sx={{ bgcolor: opp.place_edge >= 0 ? 'success.main' : 'error.main', color: 'white', fontWeight: 700, fontSize: '0.75rem' }} /></TableCell>
+    <TableCell align="right"><Chip label={formatEdge(opp.total_edge)} size="small" sx={{ bgcolor: 'success.main', color: 'white', fontWeight: 700, fontSize: '0.8rem', boxShadow: '0 2px 4px rgba(16, 185, 129, 0.3)' }} /></TableCell>
+    <TableCell align="center">
+      <Box sx={{ display: 'flex', gap: 0.5, justifyContent: 'center', flexWrap: 'wrap' }}>
+        <Tooltip title="If horse WINS" arrow><Chip label={formatCurrency(opp.profit_if_wins)} size="small" sx={{ backgroundColor: opp.profit_if_wins >= 0 ? '#10b981' : '#ef4444', color: 'white', fontWeight: 700, fontSize: '0.7rem', boxShadow: opp.profit_if_wins >= 0 ? '0 2px 4px rgba(16, 185, 129, 0.4)' : '0 2px 4px rgba(239, 68, 68, 0.4)', border: '1px solid rgba(255, 255, 255, 0.2)' }} /></Tooltip>
+        <Tooltip title="If horse PLACES" arrow><Chip label={formatCurrency(opp.profit_if_places)} size="small" sx={{ backgroundColor: opp.profit_if_places >= 0 ? '#10b981' : '#ef4444', color: 'white', fontWeight: 700, fontSize: '0.7rem', boxShadow: opp.profit_if_places >= 0 ? '0 2px 4px rgba(16, 185, 129, 0.4)' : '0 2px 4px rgba(239, 68, 68, 0.4)', border: '1px solid rgba(255, 255, 255, 0.2)' }} /></Tooltip>
+        <Tooltip title="If horse LOSES" arrow><Chip label={formatCurrency(opp.profit_if_loses)} size="small" sx={{ backgroundColor: opp.profit_if_loses >= 0 ? '#10b981' : '#ef4444', color: 'white', fontWeight: 700, fontSize: '0.7rem', boxShadow: opp.profit_if_loses >= 0 ? '0 2px 4px rgba(16, 185, 129, 0.4)' : '0 2px 4px rgba(239, 68, 68, 0.4)', border: '1px solid rgba(255, 255, 255, 0.2)' }} /></Tooltip>
+      </Box>
+      <Typography variant="caption" color="text.secondary" sx={{ mt: 0.5, fontWeight: 500, fontSize: '0.65rem' }}>
+        Win | Place | Lose
+      </Typography>
+    </TableCell>
+  </TableRow>
+)
+
+/* ─── History Table ─── */
+
+interface HistoryProps {
+  history: HistoricalOpportunity[]
+  liveKeys: Set<string>
+  headerCellSx: Record<string, any>
+  getRatingColor: (r: number) => string
+  getRatingLabel: (r: number) => string
+  formatCurrency: (v: number) => string
+  formatEdge: (v: number) => string
+  formatTime: (iso: string) => string
+  formatDateTime: (iso: string) => string
+  formatRaceInfo: (venue: string | null, scheduledTime: string | null) => string | null
+  onClear: () => void
+}
+
+const HistoryTable = ({
+  history, liveKeys, headerCellSx,
+  getRatingColor, getRatingLabel, formatCurrency, formatEdge,
+  formatTime, formatDateTime, formatRaceInfo, onClear,
+}: HistoryProps) => {
+  return (
+    <>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+        <Typography variant="body2" color="text.secondary" fontWeight={500}>
+          {history.length} opportunities seen this session
+        </Typography>
+        <Button
+          variant="outlined"
+          color="error"
+          size="small"
+          startIcon={<DeleteOutlineIcon />}
+          onClick={onClear}
+          disabled={history.length === 0}
+          sx={{ textTransform: 'none', fontWeight: 600 }}
+        >
+          Clear History
+        </Button>
+      </Box>
+
+      {history.length === 0 ? (
+        <Alert severity="info" icon={<HistoryIcon />} sx={{ borderRadius: 2, border: '1px solid rgba(59, 130, 246, 0.3)', bgcolor: 'rgba(59, 130, 246, 0.05)' }}>
+          No history yet. Opportunities will be recorded here as they appear and disappear.
+        </Alert>
+      ) : (
+      <TableContainer
+        component={Paper}
+        sx={{
+          borderRadius: 3, overflow: 'auto',
+          boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.2), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+        }}
+      >
+        <Table size="small">
+          <TableHead>
+            <TableRow sx={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)', '& .MuiTableCell-root': { borderBottom: 'none' } }}>
+              <TableCell sx={headerCellSx}>STATUS</TableCell>
+              <TableCell sx={headerCellSx}>FIRST SEEN</TableCell>
+              <TableCell sx={headerCellSx}>LAST SEEN</TableCell>
+              <TableCell sx={headerCellSx}>BEST RATING</TableCell>
+              <TableCell sx={headerCellSx}>HORSE</TableCell>
+              <TableCell sx={headerCellSx}>RACE</TableCell>
+              <TableCell sx={headerCellSx}>BOOKMAKERS</TableCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            {history.map((opp, index) => {
+              const key = `${opp.selection_name}::${opp.event_name}`
+              const isLive = liveKeys.has(key)
+
+              return (
+                <TableRow
+                  key={index}
+                  sx={{
+                    opacity: isLive ? 1 : 0.7,
+                    backgroundColor: isLive
+                      ? 'rgba(16, 185, 129, 0.06)'
+                      : 'inherit',
+                    transition: 'all 0.3s ease',
+                    verticalAlign: 'top',
+                    '&:hover': {
+                      backgroundColor: 'rgba(100, 116, 139, 0.1)',
+                    },
+                  }}
+                >
+                  <TableCell>
+                    <Chip
+                      label={isLive ? 'LIVE' : 'EXPIRED'}
+                      size="small"
+                      sx={{
+                        fontWeight: 700,
+                        fontSize: '0.7rem',
+                        bgcolor: isLive ? '#10b981' : '#9e9e9e',
+                        color: 'white',
+                      }}
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight={500} fontSize="0.85rem">
+                      {formatDateTime(opp.firstSeen)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight={500} fontSize="0.85rem">
+                      {formatDateTime(opp.lastSeen)}
+                    </Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Chip
+                      label={`${opp.bestRating}% ${getRatingLabel(opp.bestRating)}`}
+                      sx={{
+                        backgroundColor: getRatingColor(opp.bestRating),
+                        color: 'white',
+                        fontWeight: 700,
+                        fontSize: '0.75rem',
+                        boxShadow: '0 2px 4px rgba(0, 0, 0, 0.2)',
+                        border: '1px solid rgba(255, 255, 255, 0.2)',
+                      }}
+                    />
+                  </TableCell>
+                  <TableCell><Typography fontWeight={700} fontSize="0.9rem" color="text.primary">{opp.selection_name}</Typography></TableCell>
+                  <TableCell><Typography variant="body2" color="text.secondary" fontWeight={500}>{formatRaceInfo(opp.venue, opp.scheduled_time) || opp.event_name}</Typography></TableCell>
+                  <TableCell>
+                    <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                      {opp.bookmakers.map((bm, bmIdx) => (
+                        <BookmakerHistoryRow
+                          key={bmIdx}
+                          bm={bm}
+                          isFirst={bmIdx === 0}
+                          getRatingColor={getRatingColor}
+                          getRatingLabel={getRatingLabel}
+                          formatCurrency={formatCurrency}
+                          formatEdge={formatEdge}
+                        />
+                      ))}
+                    </Box>
+                  </TableCell>
+                </TableRow>
+              )
+            })}
+          </TableBody>
+        </Table>
+      </TableContainer>
+      )}
+    </>
+  )
+}
+
+/* ─── Bookmaker row within a history entry ─── */
+
+interface BookmakerHistoryRowProps {
+  bm: BookmakerEntry
+  isFirst: boolean
+  getRatingColor: (r: number) => string
+  getRatingLabel: (r: number) => string
+  formatCurrency: (v: number) => string
+  formatEdge: (v: number) => string
+}
+
+const BookmakerHistoryRow = ({ bm, isFirst, getRatingColor, getRatingLabel, formatCurrency, formatEdge }: BookmakerHistoryRowProps) => (
+  <Box
+    sx={{
+      display: 'flex',
+      flexDirection: 'column',
+      gap: 0.5,
+      p: 1,
+      borderRadius: 1,
+      bgcolor: isFirst ? 'rgba(102, 126, 234, 0.06)' : 'rgba(100, 116, 139, 0.04)',
+      border: isFirst ? '1px solid rgba(102, 126, 234, 0.15)' : '1px solid rgba(100, 116, 139, 0.1)',
+    }}
+  >
+    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+      <Typography variant="body2" fontWeight={700} fontSize="0.85rem" sx={{ minWidth: 80 }}>{bm.bookmaker}</Typography>
+      {bm.is_fair_odds && <Chip label="FO" size="small" variant="outlined" sx={{ color: '#f59e0b', borderColor: '#f59e0b', fontWeight: 700, fontSize: '0.65rem', height: 20 }} />}
+      <Chip label={`${bm.rating}%`} size="small" sx={{ backgroundColor: getRatingColor(bm.rating), color: 'white', fontWeight: 700, fontSize: '0.7rem', height: 20 }} />
+      <Chip label={`${bm.num_places} places`} size="small" sx={{ height: 20, fontSize: '0.65rem', bgcolor: 'rgba(102, 126, 234, 0.15)', color: 'primary.light', fontWeight: 600 }} />
+    </Box>
+    <Box sx={{ display: 'flex', gap: 1, flexWrap: 'wrap', alignItems: 'center' }}>
+      <Typography variant="caption" color="text.secondary" fontWeight={500}>
+        Win: {bm.bookmaker_win_odds.toFixed(2)} / Lay: {bm.betfair_win_lay_odds.toFixed(2)}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" fontWeight={500}>
+        Place: {bm.bookmaker_place_odds.toFixed(2)} / Lay: {bm.betfair_place_lay_odds.toFixed(2)}
+      </Typography>
+      <Typography variant="caption" color="text.secondary" fontWeight={500}>
+        Edge: {formatEdge(bm.total_edge)}
+      </Typography>
+    </Box>
+    <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
+      <Tooltip title="If horse WINS" arrow><Chip label={formatCurrency(bm.profit_if_wins)} size="small" sx={{ backgroundColor: bm.profit_if_wins >= 0 ? '#10b981' : '#ef4444', color: 'white', fontWeight: 700, fontSize: '0.65rem', height: 20, border: '1px solid rgba(255, 255, 255, 0.2)' }} /></Tooltip>
+      <Tooltip title="If horse PLACES" arrow><Chip label={formatCurrency(bm.profit_if_places)} size="small" sx={{ backgroundColor: bm.profit_if_places >= 0 ? '#10b981' : '#ef4444', color: 'white', fontWeight: 700, fontSize: '0.65rem', height: 20, border: '1px solid rgba(255, 255, 255, 0.2)' }} /></Tooltip>
+      <Tooltip title="If horse LOSES" arrow><Chip label={formatCurrency(bm.profit_if_loses)} size="small" sx={{ backgroundColor: bm.profit_if_loses >= 0 ? '#10b981' : '#ef4444', color: 'white', fontWeight: 700, fontSize: '0.65rem', height: 20, border: '1px solid rgba(255, 255, 255, 0.2)' }} /></Tooltip>
+      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.6rem', alignSelf: 'center' }}>W | P | L</Typography>
+    </Box>
+  </Box>
+)
