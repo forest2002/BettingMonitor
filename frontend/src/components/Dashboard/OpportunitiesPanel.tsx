@@ -565,8 +565,10 @@ const GroupedOpportunityRow = ({ rowKey, group, isExpanded, onToggle, getRatingC
         <TableCell><Typography fontWeight={700} fontSize="0.9rem" color="text.primary">{best.selection_name}</Typography></TableCell>
         <TableCell><Typography variant="body2" color="text.secondary" fontWeight={500}>{formatRaceInfo(best.venue, best.scheduled_time) || best.event_name}</Typography></TableCell>
         <TableCell>
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <Typography variant="body2" fontWeight={600} color="text.primary">{best.bookmaker}</Typography>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+            <Typography variant="body2" fontWeight={600} color="text.primary">
+              {best.bookmaker} {best.bookmaker_win_odds.toFixed(1)}
+            </Typography>
             {best.is_fair_odds && <Chip label="FO" size="small" variant="outlined" sx={{ color: '#f59e0b', borderColor: '#f59e0b', fontWeight: 700, fontSize: '0.65rem', height: 20 }} />}
             {hasMultiple && <Chip label={`+${group.length - 1} more`} size="small" sx={{ height: 20, fontSize: '0.7rem', bgcolor: 'rgba(102, 126, 234, 0.15)', color: 'primary.light', fontWeight: 600 }} />}
           </Box>
@@ -590,7 +592,9 @@ const GroupedOpportunityRow = ({ rowKey, group, isExpanded, onToggle, getRatingC
           <TableCell colSpan={2}></TableCell>
           <TableCell>
             <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <Typography variant="body2" fontWeight={600} color="text.secondary">{opp.bookmaker}</Typography>
+              <Typography variant="body2" fontWeight={600} color="text.secondary">
+                {opp.bookmaker} {opp.bookmaker_win_odds.toFixed(1)}
+              </Typography>
               {opp.is_fair_odds && <Chip label="FO" size="small" variant="outlined" sx={{ color: '#f59e0b', borderColor: '#f59e0b', fontWeight: 700, fontSize: '0.65rem', height: 20 }} />}
             </Box>
           </TableCell>
