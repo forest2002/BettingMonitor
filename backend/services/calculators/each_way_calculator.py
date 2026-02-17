@@ -213,7 +213,6 @@ class EachWayCalculator:
         for selection in selections_with_odds:
             betfair_win_lay = None
             betfair_place_lay = None
-            betfair_place_back = None
             bookmaker_odds_list = []
 
             for odds in selection.get('odds', []):
@@ -226,67 +225,35 @@ class EachWayCalculator:
                     # Place market: place_odds field stores the lay price
                     if odds.get('place_odds'):
                         betfair_place_lay = Decimal(str(odds['place_odds']))
-                    # Place market: odds_decimal stores the back price
-                    if odds.get('odds_decimal'):
-                        betfair_place_back = Decimal(str(odds['odds_decimal']))
                 else:
-                    # Regular bookmaker with EW terms, minimum odds of 6.0
-                    if odds.get('place_terms') and Decimal(str(odds['odds_decimal'])) >= 6:
+                    # Regular bookmaker with EW terms
+                    if odds.get('place_terms'):
                         bookmaker_odds_list.append({
                             'bookmaker': bk,
                             'win_odds': Decimal(str(odds['odds_decimal'])),
                             'place_terms': odds['place_terms'],
                         })
 
-            # --- Normal pass: requires win lay + place lay ---
-            normal_bookmakers = set()
-            if betfair_win_lay and betfair_place_lay:
-                for bk_odds in bookmaker_odds_list:
-                    calc = EachWayCalculator.calculate_each_way_value(
-                        bookmaker_win_odds=bk_odds['win_odds'],
-                        bookmaker_place_terms=bk_odds['place_terms'],
-                        betfair_win_lay_odds=betfair_win_lay,
-                        betfair_place_lay_odds=betfair_place_lay,
-                    )
+            # Need both Betfair win and place lay data
+            if not betfair_win_lay or not betfair_place_lay:
+                continue
 
-                    if calc['is_opportunity']:
-                        normal_bookmakers.add(bk_odds['bookmaker'])
-                        opportunities.append({
-                            'selection_name': selection['name'],
-                            'event_name': selection['event_name'],
-                            'venue': selection.get('venue'),
-                            'scheduled_time': selection.get('scheduled_time'),
-                            'bookmaker': bk_odds['bookmaker'],
-                            'is_fair_odds': False,
-                            **calc,
-                        })
+            # Check ALL bookmakers, not just the first
+            for bk_odds in bookmaker_odds_list:
+                calc = EachWayCalculator.calculate_each_way_value(
+                    bookmaker_win_odds=bk_odds['win_odds'],
+                    bookmaker_place_terms=bk_odds['place_terms'],
+                    betfair_win_lay_odds=betfair_win_lay,
+                    betfair_place_lay_odds=betfair_place_lay,
+                )
 
-            # --- Fair Odds pass: requires win lay + place back + place lay, spread <= 5000% ---
-            if betfair_win_lay and betfair_place_back and betfair_place_lay:
-                spread = (betfair_place_lay - betfair_place_back) / betfair_place_back
-                if spread <= Decimal('50.0'):
-                    fair_place_lay = (betfair_place_back + betfair_place_lay) / 2
-                    for bk_odds in bookmaker_odds_list:
-                        # Skip if already found as normal opportunity
-                        if bk_odds['bookmaker'] in normal_bookmakers:
-                            continue
-                        calc = EachWayCalculator.calculate_each_way_value(
-                            bookmaker_win_odds=bk_odds['win_odds'],
-                            bookmaker_place_terms=bk_odds['place_terms'],
-                            betfair_win_lay_odds=betfair_win_lay,
-                            betfair_place_lay_odds=fair_place_lay,
-                        )
-                        # Always add Fair Odds opportunities, even if not profitable
-                        # This allows users to see FO flagged horses
-                        opportunities.append({
-                            'selection_name': selection['name'],
-                            'event_name': selection['event_name'],
-                            'venue': selection.get('venue'),
-                            'scheduled_time': selection.get('scheduled_time'),
-                            'bookmaker': bk_odds['bookmaker'],
-                            'is_fair_odds': True,
-                            **calc,
-                        })
+                if calc['is_opportunity']:
+                    opportunities.append({
+                        'selection_name': selection['name'],
+                        'event_name': selection['event_name'],
+                        'bookmaker': bk_odds['bookmaker'],
+                        **calc,
+                    })
 
         # Sort by rating (best first)
         opportunities.sort(key=lambda x: x['rating'], reverse=True)

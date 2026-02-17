@@ -41,11 +41,11 @@ export const OpportunitiesPanel = () => {
   const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
   useEffect(() => {
-    fetchOpportunities(-100) // Allow negative ratings to show FO opportunities
+    fetchOpportunities(4) // Minimum rating of 5
 
     // Refresh every 30 seconds
     const interval = setInterval(() => {
-      fetchOpportunities(-100)
+      fetchOpportunities(4)
     }, 30000)
 
     // Fetch Google Sheet URL
@@ -306,7 +306,7 @@ export const OpportunitiesPanel = () => {
         </ToggleButtonGroup>
         <Tooltip title="Refresh now">
           <IconButton
-            onClick={() => fetchOpportunities(-100)}
+            onClick={() => fetchOpportunities(4)}
             disabled={isLoading}
             sx={{
               border: '1px solid rgba(100, 116, 139, 0.3)',
