@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from models.schemas import EventWithSelectionsSchema, EventSchema
 from db.database import db
 import logging
+import json
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/events", tags=["events"])
@@ -51,6 +52,10 @@ async def get_events(
         for row in events_rows:
             event_dict = dict(row)
 
+            # Parse metadata JSON string to dict
+            if event_dict.get('metadata') and isinstance(event_dict['metadata'], str):
+                event_dict['metadata'] = json.loads(event_dict['metadata'])
+
             # Get selections for this event
             selections_query = """
                 SELECT id, event_id, name, metadata
@@ -59,7 +64,16 @@ async def get_events(
                 ORDER BY name
             """
             selections_rows = await db.fetch_all(selections_query, row['id'])
-            event_dict['selections'] = [dict(s) for s in selections_rows]
+
+            # Parse selection metadata JSON strings to dicts
+            selections = []
+            for sel in selections_rows:
+                sel_dict = dict(sel)
+                if sel_dict.get('metadata') and isinstance(sel_dict['metadata'], str):
+                    sel_dict['metadata'] = json.loads(sel_dict['metadata'])
+                selections.append(sel_dict)
+
+            event_dict['selections'] = selections
 
             events.append(EventWithSelectionsSchema(**event_dict))
 
@@ -90,6 +104,10 @@ async def get_event(event_id: int):
 
         event_dict = dict(event_row)
 
+        # Parse metadata JSON string to dict
+        if event_dict.get('metadata') and isinstance(event_dict['metadata'], str):
+            event_dict['metadata'] = json.loads(event_dict['metadata'])
+
         # Get selections
         selections_query = """
             SELECT id, event_id, name, metadata
@@ -98,7 +116,16 @@ async def get_event(event_id: int):
             ORDER BY name
         """
         selections_rows = await db.fetch_all(selections_query, event_id)
-        event_dict['selections'] = [dict(s) for s in selections_rows]
+
+        # Parse selection metadata JSON strings to dicts
+        selections = []
+        for sel in selections_rows:
+            sel_dict = dict(sel)
+            if sel_dict.get('metadata') and isinstance(sel_dict['metadata'], str):
+                sel_dict['metadata'] = json.loads(sel_dict['metadata'])
+            selections.append(sel_dict)
+
+        event_dict['selections'] = selections
 
         return EventWithSelectionsSchema(**event_dict)
 
