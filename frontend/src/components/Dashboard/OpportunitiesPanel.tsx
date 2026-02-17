@@ -30,6 +30,7 @@ import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown'
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp'
 import Collapse from '@mui/material/Collapse'
+import FileDownloadIcon from '@mui/icons-material/FileDownload'
 import { useOpportunitiesStore, Opportunity, HistoricalOpportunity, BookmakerEntry } from '../../stores/opportunitiesStore'
 
 type ViewMode = 'live' | 'history'
@@ -702,23 +703,112 @@ const HistoryTable = ({
     })
   }
 
+  const exportToCSV = () => {
+    // Create CSV header
+    const headers = [
+      'Status',
+      'Horse',
+      'Race',
+      'Venue',
+      'Time',
+      'First Seen',
+      'Last Seen',
+      'Best Rating',
+      'Bookmaker',
+      'Bookmaker Win Odds',
+      'Bookmaker Place Odds',
+      'Betfair Win Lay',
+      'Betfair Place Lay',
+      'Win Edge',
+      'Place Edge',
+      'Total Edge',
+      'Profit If Wins',
+      'Profit If Places',
+      'Profit If Loses',
+      'Num Places',
+      'Is Fair Odds'
+    ]
+
+    // Create CSV rows
+    const rows = history.flatMap(opp => {
+      const key = `${opp.selection_name}::${opp.event_name}`
+      const isLive = liveKeys.has(key)
+      const status = isLive ? 'LIVE' : 'EXPIRED'
+      const raceInfo = formatRaceInfo(opp.venue, opp.scheduled_time) || opp.event_name
+
+      return opp.bookmakers.map(bm => [
+        status,
+        opp.selection_name,
+        opp.event_name,
+        opp.venue || '',
+        opp.scheduled_time ? new Date(opp.scheduled_time).toLocaleString('en-GB') : '',
+        formatDateTime(opp.firstSeen),
+        formatDateTime(opp.lastSeen),
+        opp.bestRating,
+        bm.bookmaker,
+        bm.bookmaker_win_odds.toFixed(2),
+        bm.bookmaker_place_odds.toFixed(2),
+        bm.betfair_win_lay_odds.toFixed(2),
+        bm.betfair_place_lay_odds.toFixed(2),
+        (bm.win_edge * 100).toFixed(2) + '%',
+        (bm.place_edge * 100).toFixed(2) + '%',
+        (bm.total_edge * 100).toFixed(2) + '%',
+        bm.profit_if_wins.toFixed(2),
+        bm.profit_if_places.toFixed(2),
+        bm.profit_if_loses.toFixed(2),
+        bm.num_places,
+        bm.is_fair_odds ? 'Yes' : 'No'
+      ])
+    })
+
+    // Convert to CSV string
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.map(cell => `"${cell}"`).join(','))
+    ].join('\n')
+
+    // Create blob and download
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    link.setAttribute('href', url)
+    link.setAttribute('download', `eachway-history-${new Date().toISOString().split('T')[0]}.csv`)
+    link.style.visibility = 'hidden'
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   return (
     <>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
         <Typography variant="body2" color="text.secondary" fontWeight={500}>
           {history.length} opportunities seen this session
         </Typography>
-        <Button
-          variant="outlined"
-          color="error"
-          size="small"
-          startIcon={<DeleteOutlineIcon />}
-          onClick={onClear}
-          disabled={history.length === 0}
-          sx={{ textTransform: 'none', fontWeight: 600 }}
-        >
-          Clear History
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1 }}>
+          <Button
+            variant="outlined"
+            color="primary"
+            size="small"
+            startIcon={<FileDownloadIcon />}
+            onClick={exportToCSV}
+            disabled={history.length === 0}
+            sx={{ textTransform: 'none', fontWeight: 600 }}
+          >
+            Export CSV
+          </Button>
+          <Button
+            variant="outlined"
+            color="error"
+            size="small"
+            startIcon={<DeleteOutlineIcon />}
+            onClick={onClear}
+            disabled={history.length === 0}
+            sx={{ textTransform: 'none', fontWeight: 600 }}
+          >
+            Clear History
+          </Button>
+        </Box>
       </Box>
 
       {history.length === 0 ? (
