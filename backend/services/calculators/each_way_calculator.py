@@ -273,7 +273,8 @@ class EachWayCalculator:
                         betfair_win_lay_odds=betfair_win_lay,
                         betfair_place_lay_odds=betfair_place_back,  # Use BACK price
                     )
-                    if calc['is_opportunity']:
+                    # Only show FO opportunities with rating >= 10 (GOOD or EXCELLENT)
+                    if calc['is_opportunity'] and calc['rating'] >= 10:
                         opportunities.append({
                             'selection_name': selection['name'],
                             'event_name': selection['event_name'],
