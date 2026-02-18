@@ -206,20 +206,32 @@ class BetfairAPIClient(BookmakerScraper):
 
                     self.logger.info(f"{mkt_type} market {market_id} has {len(runners_list)} runners, runner_map has {len(runner_map)} entries")
 
-                    # Calculate place terms based on number of runners
+                    # Count only ACTIVE runners (exclude REMOVED/non-runners)
+                    active_runners = 0
+                    for runner in runners_list:
+                        if isinstance(runner, dict):
+                            status = runner.get('status', 'ACTIVE')
+                        else:
+                            status = runner.status if hasattr(runner, 'status') else 'ACTIVE'
+
+                        if status == 'ACTIVE':
+                            active_runners += 1
+
+                    # Calculate place terms based on ACTIVE runners only
                     # Standard UK/Irish racing rules:
                     # 5-7 runners: 2 places, 1/5 odds
                     # 8-15 runners: 3 places, 1/5 odds
                     # 16+ runners: 4 places, 1/5 odds
-                    num_runners = len(runners_list)
-                    if num_runners >= 16:
+                    if active_runners >= 16:
                         place_terms = "1/5 1-2-3-4"
-                    elif num_runners >= 8:
+                    elif active_runners >= 8:
                         place_terms = "1/5 1-2-3"
-                    elif num_runners >= 5:
+                    elif active_runners >= 5:
                         place_terms = "1/5 1-2"
                     else:
                         place_terms = None  # No each-way betting for races with less than 5 runners
+
+                    self.logger.info(f"{mkt_type} market {market_id}: {len(runners_list)} total runners, {active_runners} active, place terms: {place_terms}")
 
                     if runners_list and len(odds_data_list) < 5:
                         self.logger.info(f"Sample runner: {runners_list[0] if isinstance(runners_list[0], dict) else 'object'}")
