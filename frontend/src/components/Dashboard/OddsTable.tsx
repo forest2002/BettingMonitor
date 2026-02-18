@@ -25,7 +25,10 @@ import { Event, Odds } from '../../types'
 type ViewMode = 'list' | 'venue'
 
 export const OddsTable = () => {
-  const { events, oddsMap } = useOddsStore()
+  // Use selector to only subscribe to events and oddsMap (not lastUpdate)
+  // This prevents unnecessary re-renders when lastUpdate changes
+  const events = useOddsStore((state) => state.events)
+  const oddsMap = useOddsStore((state) => state.oddsMap)
   const [viewMode, setViewMode] = useState<ViewMode>('list')
   const [expandedVenues, setExpandedVenues] = useState<Set<string>>(new Set())
 
@@ -54,17 +57,6 @@ export const OddsTable = () => {
     return new Map(sortedEntries)
   }, [sortedEvents])
 
-  const formatDateTime = (dateString: string) => {
-    const date = new Date(dateString)
-    return date.toLocaleString('en-GB', {
-      weekday: 'short',
-      day: '2-digit',
-      month: 'short',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
-
   const formatTimeOnly = (dateString: string) => {
     const date = new Date(dateString)
     return date.toLocaleString('en-GB', {
@@ -74,7 +66,7 @@ export const OddsTable = () => {
   }
 
   const getOddsForSelection = (eventId: number, selectionId: number) => {
-    const eventOdds = oddsMap.get(eventId) || []
+    const eventOdds = oddsMap[eventId] || []
     return eventOdds.filter((odds) => odds.selection_id === selectionId)
   }
 
@@ -113,6 +105,15 @@ export const OddsTable = () => {
     // Filter to only allowed bookmakers that have data
     const sortedBookmakers = allowedBookmakers.filter(bm => bookmakerNames.includes(bm))
 
+    // Get place terms for each bookmaker (should be same for all horses in the race)
+    const placeTermsByBookmaker: Record<string, string> = {}
+    sortedBookmakers.forEach(bookmaker => {
+      const oddsWithTerms = allOdds.find(o => o.bookmaker_name === bookmaker && o.place_terms)
+      if (oddsWithTerms?.place_terms) {
+        placeTermsByBookmaker[bookmaker] = oddsWithTerms.place_terms
+      }
+    })
+
     // Add Betfair Exchange if available (for Back and Lay columns)
     const hasBetfair = bookmakerNames.includes('Betfair Exchange')
 
@@ -139,9 +140,25 @@ export const OddsTable = () => {
                 <TableCell
                   key={bookmaker}
                   align="center"
-                  sx={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', minWidth: 90 }}
+                  sx={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase', minWidth: 90, verticalAlign: 'top' }}
                 >
-                  {bookmaker}
+                  <Box>
+                    <Typography sx={{ fontWeight: 700, fontSize: '0.75rem', textTransform: 'uppercase' }}>
+                      {bookmaker}
+                    </Typography>
+                    {placeTermsByBookmaker[bookmaker] && (
+                      <Typography
+                        sx={{
+                          fontSize: '0.7rem',
+                          color: 'text.secondary',
+                          fontWeight: 500,
+                          mt: 0.25
+                        }}
+                      >
+                        {placeTermsByBookmaker[bookmaker]}
+                      </Typography>
+                    )}
+                  </Box>
                 </TableCell>
               ))}
               {hasBetfair && (
@@ -157,9 +174,26 @@ export const OddsTable = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {event.selections.map((selection) => {
+            {event.selections
+              .sort((a, b) => {
+                // Sort by Betfair Exchange back price (lowest to highest)
+                const oddsA = getOddsForSelection(event.id, a.id)
+                const oddsB = getOddsForSelection(event.id, b.id)
+                const betfairA = getOddsByBookmaker(oddsA)['Betfair Exchange']
+                const betfairB = getOddsByBookmaker(oddsB)['Betfair Exchange']
+
+                const priceA = betfairA ? Number(betfairA.odds_decimal) : Infinity
+                const priceB = betfairB ? Number(betfairB.odds_decimal) : Infinity
+
+                return priceA - priceB
+              })
+              .map((selection) => {
               const selectionOdds = getOddsForSelection(event.id, selection.id)
               const byBookmaker = getOddsByBookmaker(selectionOdds)
+
+              // Check if horse is a non-runner (from metadata)
+              const isNonRunner = selection.metadata?.status === 'REMOVED' ||
+                                 selection.metadata?.runner_status === 'REMOVED'
 
               // Find best price across all displayed bookmakers
               const allPrices = sortedBookmakers
@@ -177,9 +211,28 @@ export const OddsTable = () => {
                   }}
                 >
                   <TableCell>
-                    <Typography fontWeight={700} fontSize="0.95rem" color="text.primary">
-                      {selection.name}
-                    </Typography>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                      <Typography
+                        fontWeight={700}
+                        fontSize="0.95rem"
+                        color={isNonRunner ? "text.disabled" : "text.primary"}
+                        sx={isNonRunner ? { textDecoration: 'line-through' } : {}}
+                      >
+                        {selection.name}
+                      </Typography>
+                      {isNonRunner && (
+                        <Chip
+                          label="Non Runner"
+                          size="small"
+                          color="error"
+                          sx={{
+                            height: '20px',
+                            fontSize: '0.7rem',
+                            fontWeight: 600
+                          }}
+                        />
+                      )}
+                    </Box>
                   </TableCell>
 
                   {sortedBookmakers.map(bookmaker => {
@@ -235,13 +288,13 @@ export const OddsTable = () => {
     )
   }
 
-  const EventRow = ({ event, showFullDate = true }: { event: Event; showFullDate?: boolean }) => {
-    const hasOdds = oddsMap.has(event.id) && oddsMap.get(event.id)!.length > 0
+  const EventRow = ({ event, defaultCollapsed = false }: { event: Event; defaultCollapsed?: boolean }) => {
+    const hasOdds = oddsMap[event.id] && oddsMap[event.id].length > 0
 
     return (
       <Accordion
         key={event.id}
-        defaultExpanded={hasOdds}
+        defaultExpanded={defaultCollapsed ? false : hasOdds}
         sx={{
           mb: 2,
           borderRadius: '12px !important',
@@ -268,7 +321,7 @@ export const OddsTable = () => {
         >
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, width: '100%', flexWrap: 'wrap' }}>
             <Chip
-              label={event.event_type_name || 'Horse Racing'}
+              label={formatTimeOnly(event.scheduled_time)}
               size="small"
               sx={{
                 bgcolor: 'primary.main',
@@ -292,22 +345,6 @@ export const OddsTable = () => {
                 }}
               />
             )}
-            <Box
-              sx={{
-                ml: 'auto',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 1,
-                bgcolor: 'rgba(100, 116, 139, 0.1)',
-                px: 1.5,
-                py: 0.5,
-                borderRadius: 1,
-              }}
-            >
-              <Typography variant="body2" color="text.secondary" fontWeight={600}>
-                {showFullDate ? formatDateTime(event.scheduled_time) : formatTimeOnly(event.scheduled_time)}
-              </Typography>
-            </Box>
           </Box>
         </AccordionSummary>
         <AccordionDetails sx={{ p: 2 }}>
@@ -373,7 +410,7 @@ export const OddsTable = () => {
           </Box>
         </Paper>
         {isExpanded && events.map((event) => (
-          <EventRow key={event.id} event={event} showFullDate={false} />
+          <EventRow key={event.id} event={event} defaultCollapsed />
         ))}
       </Box>
     )

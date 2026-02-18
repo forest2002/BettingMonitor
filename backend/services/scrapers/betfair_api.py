@@ -61,7 +61,7 @@ class BetfairAPIClient(BookmakerScraper):
             raise
 
     async def scrape(self) -> List[OddsData]:
-        """Fetch odds from Betfair API for upcoming horse races (WIN and PLACE markets)"""
+        """Fetch odds from Betfair API for upcoming horse races (WIN and PLACE markets for each-way calculator)"""
         if not self.client:
             self.logger.error("API client not initialized")
             return []
@@ -77,7 +77,7 @@ class BetfairAPIClient(BookmakerScraper):
                 'to': (datetime.utcnow() + timedelta(hours=24)).isoformat()
             }
 
-            # Fetch both WIN and PLACE market catalogues
+            # Fetch both WIN and PLACE markets (both needed for each-way calculator)
             win_filter = market_filter(
                 event_type_ids=['7'],
                 market_countries=['GB', 'IE'],
@@ -98,10 +98,10 @@ class BetfairAPIClient(BookmakerScraper):
             ]
 
             win_catalogues = self.client.betting.list_market_catalogue(
-                filter=win_filter, max_results=100, market_projection=projection
+                filter=win_filter, max_results=200, market_projection=projection
             )
             place_catalogues = self.client.betting.list_market_catalogue(
-                filter=place_filter, max_results=100, market_projection=projection
+                filter=place_filter, max_results=200, market_projection=projection
             )
 
             self.logger.info(
@@ -111,7 +111,6 @@ class BetfairAPIClient(BookmakerScraper):
             # Build catalogue lookup by market ID and collect all market IDs
             catalogue_map = {}
             market_ids = []
-            # Track which market type each ID belongs to
             market_type_map = {}
 
             for market in win_catalogues:
@@ -171,6 +170,8 @@ class BetfairAPIClient(BookmakerScraper):
                         scheduled_time = datetime.fromisoformat(catalogue.get('marketStartTime', '').replace('Z', '+00:00'))
                         market_id = catalogue.get('marketId', '')
                         runners = catalogue.get('runners', [])
+                        race_type = catalogue.get('description', {}).get('raceType')
+                        market_name = catalogue.get('marketName', '')
 
                         if not event_name:
                             self.logger.warning(f"Skipping market with missing event name: {market_id}")
@@ -183,6 +184,8 @@ class BetfairAPIClient(BookmakerScraper):
                     else:
                         event_name = catalogue.event.name if catalogue.event else None
                         venue = catalogue.event.venue if catalogue.event else None
+                        race_type = catalogue.description.race_type if catalogue.description else None
+                        market_name = catalogue.market_name if catalogue.market_name else ''
 
                         if not event_name:
                             self.logger.warning(f"Skipping market with missing event name")
@@ -202,6 +205,21 @@ class BetfairAPIClient(BookmakerScraper):
                         runners_list = market_book.runners
 
                     self.logger.info(f"{mkt_type} market {market_id} has {len(runners_list)} runners, runner_map has {len(runner_map)} entries")
+
+                    # Calculate place terms based on number of runners
+                    # Standard UK/Irish racing rules:
+                    # 5-7 runners: 2 places, 1/5 odds
+                    # 8-15 runners: 3 places, 1/5 odds
+                    # 16+ runners: 4 places, 1/5 odds
+                    num_runners = len(runners_list)
+                    if num_runners >= 16:
+                        place_terms = "1/5 1-2-3-4"
+                    elif num_runners >= 8:
+                        place_terms = "1/5 1-2-3"
+                    elif num_runners >= 5:
+                        place_terms = "1/5 1-2"
+                    else:
+                        place_terms = None  # No each-way betting for races with less than 5 runners
 
                     if runners_list and len(odds_data_list) < 5:
                         self.logger.info(f"Sample runner: {runners_list[0] if isinstance(runners_list[0], dict) else 'object'}")
@@ -253,7 +271,7 @@ class BetfairAPIClient(BookmakerScraper):
 
                             runner_status = runner.get('status', 'ACTIVE') if isinstance(runner, dict) else runner.status
 
-                            # Set bookmaker name and metadata based on market type
+                            # Use different bookmaker names for WIN vs PLACE (needed for calculator)
                             if mkt_type == 'PLACE':
                                 bk_name = "Betfair Exchange Place"
                                 meta = {
@@ -261,7 +279,9 @@ class BetfairAPIClient(BookmakerScraper):
                                     "selection_id": selection_id,
                                     "source": "betfair_api",
                                     "status": runner_status,
-                                    "market_type": "PLACE"
+                                    "market_type": "PLACE",
+                                    "race_type": race_type,
+                                    "market_name": market_name,
                                 }
                             else:
                                 bk_name = "Betfair Exchange"
@@ -270,7 +290,9 @@ class BetfairAPIClient(BookmakerScraper):
                                     "selection_id": selection_id,
                                     "source": "betfair_api",
                                     "status": runner_status,
-                                    "market_type": "WIN"
+                                    "market_type": "WIN",
+                                    "race_type": race_type,
+                                    "market_name": market_name,
                                 }
 
                             odds_data = OddsData(
@@ -280,7 +302,7 @@ class BetfairAPIClient(BookmakerScraper):
                                 selection_name=horse_name,
                                 odds_decimal=back_price,
                                 place_odds=lay_price,
-                                place_terms=None,
+                                place_terms=place_terms,
                                 bookmaker_name=bk_name,
                                 event_type="horse_racing",
                                 metadata=meta

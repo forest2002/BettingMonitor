@@ -262,28 +262,34 @@ class EachWayCalculator:
                         })
 
             # --- Fair Odds pass: use place BACK price (matches other platforms) ---
-            if betfair_win_lay and betfair_place_back:
-                for bk_odds in bookmaker_odds_list:
-                    # Skip if already found as normal opportunity
-                    if bk_odds['bookmaker'] in normal_bookmakers:
-                        continue
-                    calc = EachWayCalculator.calculate_each_way_value(
-                        bookmaker_win_odds=bk_odds['win_odds'],
-                        bookmaker_place_terms=bk_odds['place_terms'],
-                        betfair_win_lay_odds=betfair_win_lay,
-                        betfair_place_lay_odds=betfair_place_back,  # Use BACK price
-                    )
-                    # Only show FO opportunities with rating >= 10 (GOOD or EXCELLENT)
-                    if calc['is_opportunity'] and calc['rating'] >= 10:
-                        opportunities.append({
-                            'selection_name': selection['name'],
-                            'event_name': selection['event_name'],
-                            'venue': selection.get('venue'),
-                            'scheduled_time': selection.get('scheduled_time'),
-                            'bookmaker': bk_odds['bookmaker'],
-                            'is_fair_odds': True,
-                            **calc,
-                        })
+            if betfair_win_lay and betfair_place_back and betfair_place_lay:
+                # Calculate spread between place back and lay
+                place_spread_pct = (betfair_place_lay - betfair_place_back) / betfair_place_back * 100
+
+                # Only process if spread is reasonable (max 100%)
+                # This filters out low liquidity markets with unrealistic spreads
+                if place_spread_pct <= 100:
+                    for bk_odds in bookmaker_odds_list:
+                        # Skip if already found as normal opportunity
+                        if bk_odds['bookmaker'] in normal_bookmakers:
+                            continue
+                        calc = EachWayCalculator.calculate_each_way_value(
+                            bookmaker_win_odds=bk_odds['win_odds'],
+                            bookmaker_place_terms=bk_odds['place_terms'],
+                            betfair_win_lay_odds=betfair_win_lay,
+                            betfair_place_lay_odds=betfair_place_back,  # Use BACK price
+                        )
+                        # Only show FO opportunities with rating >= 15 (EXCELLENT only)
+                        if calc['is_opportunity'] and calc['rating'] >= 15:
+                            opportunities.append({
+                                'selection_name': selection['name'],
+                                'event_name': selection['event_name'],
+                                'venue': selection.get('venue'),
+                                'scheduled_time': selection.get('scheduled_time'),
+                                'bookmaker': bk_odds['bookmaker'],
+                                'is_fair_odds': True,
+                                **calc,
+                            })
 
         # Sort by rating (best first)
         opportunities.sort(key=lambda x: x['rating'], reverse=True)

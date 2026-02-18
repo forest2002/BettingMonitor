@@ -364,14 +364,28 @@ class OddscheckerScraper(BookmakerScraper):
                 scheduled_time = self._parse_race_time(race_time, race_date)
                 event_name = race_name or f"{venue} {race_time}"
 
-                place_terms = self._extract_each_way_terms(driver)
-                self.logger.info(f"Place terms for {venue} {race_time}: {place_terms}")
-
                 # Runner rows
                 runner_rows = driver.find_elements(By.CSS_SELECTOR, 'tr.diff-row')
                 if not runner_rows:
                     self.logger.debug(f"No runner rows for {race_url}")
                     return []
+
+                # Count number of runners to determine place terms
+                # Standard UK/Irish racing rules:
+                # 5-7 runners: 2 places, 1/5 odds
+                # 8-15 runners: 3 places, 1/5 odds
+                # 16+ runners: 4 places, 1/5 odds
+                num_runners = len(runner_rows)
+                if num_runners >= 16:
+                    place_terms = "1/5 1-2-3-4"
+                elif num_runners >= 8:
+                    place_terms = "1/5 1-2-3"
+                elif num_runners >= 5:
+                    place_terms = "1/5 1-2"
+                else:
+                    place_terms = None  # No each-way betting for races with less than 5 runners
+
+                self.logger.info(f"Place terms for {venue} {race_time} ({num_runners} runners): {place_terms}")
 
                 bookmakers_found = set()
 
@@ -398,6 +412,7 @@ class OddscheckerScraper(BookmakerScraper):
                             if odds_decimal is None:
                                 continue
 
+                            # Calculate place odds using the determined place terms
                             place_odds = None
                             if place_terms:
                                 place_odds = self._calculate_place_odds(
