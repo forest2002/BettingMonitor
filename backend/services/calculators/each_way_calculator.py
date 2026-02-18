@@ -232,11 +232,14 @@ class EachWayCalculator:
                 else:
                     # Regular bookmaker with EW terms
                     if odds.get('place_terms'):
-                        bookmaker_odds_list.append({
-                            'bookmaker': bk,
-                            'win_odds': Decimal(str(odds['odds_decimal'])),
-                            'place_terms': odds['place_terms'],
-                        })
+                        win_odds = Decimal(str(odds['odds_decimal']))
+                        # Only consider horses with win odds >= 7.0
+                        if win_odds >= Decimal('7.0'):
+                            bookmaker_odds_list.append({
+                                'bookmaker': bk,
+                                'win_odds': win_odds,
+                                'place_terms': odds['place_terms'],
+                            })
 
             # --- Normal pass: requires win lay + place lay ---
             normal_bookmakers = set()
