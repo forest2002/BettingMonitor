@@ -147,14 +147,6 @@ export const OpportunitiesPanel = () => {
     })
   }
 
-  if (isLoading && opportunities.length === 0) {
-    return (
-      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
-        <CircularProgress />
-      </Box>
-    )
-  }
-
   if (error) {
     return <Alert severity="error">{error}</Alert>
   }
@@ -187,6 +179,14 @@ export const OpportunitiesPanel = () => {
   )
 
   const headerCellSx = { color: 'white', fontWeight: 700, fontSize: '0.75rem', whiteSpace: 'nowrap' as const }
+
+  if (isLoading && opportunities.length === 0 && history.length === 0) {
+    return (
+      <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
+        <CircularProgress />
+      </Box>
+    )
+  }
 
   return (
     <Box>
