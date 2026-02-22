@@ -1,19 +1,8 @@
-import { Container, AppBar, Toolbar, Typography, Box, Button, Chip } from '@mui/material'
-import RefreshIcon from '@mui/icons-material/Refresh'
+import { Container, AppBar, Toolbar, Typography, Box, Chip } from '@mui/material'
 import AutorenewIcon from '@mui/icons-material/Autorenew'
 import { Dashboard } from './components/Dashboard/Dashboard'
-import { useOddsStore } from './stores/oddsStore'
-import { useOpportunitiesStore } from './stores/opportunitiesStore'
 
 function App() {
-  const { fetchEvents, isLoading } = useOddsStore()
-  const { fetchOpportunities } = useOpportunitiesStore()
-
-  const handleRefresh = () => {
-    fetchEvents()
-    fetchOpportunities()
-  }
-
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
       <AppBar
@@ -50,14 +39,13 @@ function App() {
                 },
               }}
             />
-            Betting Monitor
+            Each-Way Tracker
           </Typography>
           <Chip
             icon={<AutorenewIcon />}
-            label="Auto-refresh: 60s"
+            label="Auto-refresh: 2s"
             size="small"
             sx={{
-              mr: 2,
               bgcolor: 'rgba(16, 185, 129, 0.15)',
               color: '#10b981',
               fontWeight: 600,
@@ -71,22 +59,6 @@ function App() {
               },
             }}
           />
-          <Button
-            color="inherit"
-            startIcon={<RefreshIcon />}
-            onClick={handleRefresh}
-            disabled={isLoading}
-            sx={{
-              bgcolor: 'rgba(255, 255, 255, 0.1)',
-              '&:hover': {
-                bgcolor: 'rgba(255, 255, 255, 0.2)',
-              },
-              backdropFilter: 'blur(10px)',
-              transition: 'all 0.3s ease',
-            }}
-          >
-            Refresh
-          </Button>
         </Toolbar>
       </AppBar>
 
@@ -111,7 +83,7 @@ function App() {
             align="center"
             sx={{ fontWeight: 500 }}
           >
-            Betting Monitor v1.0.0 - Real-time odds monitoring
+            Each-Way Tracker v1.0.0 - Real-time odds monitoring
           </Typography>
         </Container>
       </Box>
