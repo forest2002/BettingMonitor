@@ -1,4 +1,4 @@
-# Betfair & Bookmaker Price Monitoring Web Application
+# Each-Way Tracker
 
 Real-time odds monitoring web application for UK bookmakers including Betfair, Bet365, William Hill, and more.
 
@@ -93,7 +93,7 @@ npm run dev
 ## Project Structure
 
 ```
-betting-monitor/
+each-way-tracker/
 ├── backend/
 │   ├── api/
 │   │   └── routes/

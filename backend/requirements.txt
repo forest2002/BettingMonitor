@@ -12,8 +12,15 @@ selenium==4.16.0
 beautifulsoup4==4.12.3
 lxml==5.1.0
 
+# Betfair API
+betfairlightweight==2.19.1
+
 # Scheduling
 APScheduler==3.10.4
+
+# Google Sheets
+gspread==6.1.4
+google-auth==2.28.1
 
 # Utils
 python-dotenv==1.0.0

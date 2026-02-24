@@ -40,12 +40,13 @@ class ScraperOrchestrator:
             await redis_client.connect()
             logger.info("Database connections established")
 
-            # Initialize Betfair client (API or scraper based on config)
-            logger.info("Initializing Betfair client...")
-            betfair_client = get_betfair_client()
-            await betfair_client.initialize()
-            self.scrapers['betfair'] = betfair_client
-            logger.info(f"Betfair client initialized: {betfair_client.bookmaker_name}")
+            # Initialize Betfair REST API client (simple polling, no streaming complexity)
+            logger.info("Initializing Betfair REST API client...")
+            from services.scrapers.betfair_api import BetfairAPIClient
+            betfair_api = BetfairAPIClient()
+            await betfair_api.initialize()
+            self.scrapers['betfair'] = betfair_api
+            logger.info(f"Betfair API initialized: {betfair_api.bookmaker_name}")
 
             # Initialize Oddschecker scraper (replaces individual PP/Bet365 scrapers)
             logger.info("Initializing Oddschecker scraper...")
@@ -67,27 +68,27 @@ class ScraperOrchestrator:
 
     def _schedule_jobs(self):
         """Schedule scraper jobs"""
-        # Betfair Exchange: every 45 seconds (baseline odds)
+        # Betfair REST API: every 2 seconds (very fast polling)
         self.scheduler.add_job(
             self._run_scraper,
             'interval',
-            seconds=45,
+            seconds=2,
             args=['betfair'],
             id='betfair_job',
             replace_existing=True
         )
-        logger.info("Scheduled Betfair Exchange scraper every 45 seconds")
+        logger.info("Scheduled Betfair REST API polling every 2 seconds")
 
-        # Oddschecker: every 45 seconds (scrapes all UK/Irish race pages)
+        # Oddschecker: every 60 seconds (scrapes 5 key bookmakers only)
         self.scheduler.add_job(
             self._run_scraper,
             'interval',
-            seconds=45,
+            seconds=60,
             args=['oddschecker'],
             id='oddschecker_job',
             replace_existing=True
         )
-        logger.info("Scheduled Oddschecker scraper every 45 seconds")
+        logger.info("Scheduled Oddschecker scraper every 60 seconds")
 
         # Cleanup: remove finished races every 2 minutes
         self.scheduler.add_job(
@@ -99,13 +100,27 @@ class ScraperOrchestrator:
         )
         logger.info("Scheduled event cleanup every 2 minutes")
 
+        # Daily cleanup: clear all data at 6am every day
+        self.scheduler.add_job(
+            self._daily_cleanup,
+            'cron',
+            hour=6,
+            minute=0,
+            id='daily_cleanup_job',
+            replace_existing=True
+        )
+        logger.info("Scheduled daily cleanup at 6:00 AM")
+
     async def _cleanup_old_events(self):
         """Delete events (and their selections/odds) that have finished.
 
         A race is considered finished if:
-        1. Its scheduled_time has passed, OR
+        1. Its scheduled_time was over 2 hours ago, OR
         2. It is still 'upcoming' but has had no fresh odds in the last
            30 minutes (stale / wrongly-dated event)
+
+        Note: We keep events for 2 hours after their scheduled time to ensure
+        the frontend has time to display results and handle any timing edge cases.
         """
         try:
             # First, mark stale events as completed — these are events still
@@ -125,34 +140,34 @@ class ScraperOrchestrator:
             """
             await db.execute(mark_stale)
 
-            # Delete odds for finished / completed events
+            # Delete odds for events that finished over 2 hours ago
             delete_odds = """
                 DELETE FROM odds_history
                 WHERE selection_id IN (
                     SELECT s.id FROM selections s
                     JOIN events e ON s.event_id = e.id
-                    WHERE e.scheduled_time < NOW()
-                       OR e.status = 'completed'
+                    WHERE e.scheduled_time < NOW() - INTERVAL '2 hours'
+                       OR (e.status = 'completed' AND e.scheduled_time < NOW() - INTERVAL '2 hours')
                 )
             """
             await db.execute(delete_odds)
 
-            # Delete selections for finished / completed events
+            # Delete selections for events that finished over 2 hours ago
             delete_selections = """
                 DELETE FROM selections
                 WHERE event_id IN (
                     SELECT id FROM events
-                    WHERE scheduled_time < NOW()
-                       OR status = 'completed'
+                    WHERE scheduled_time < NOW() - INTERVAL '2 hours'
+                       OR (status = 'completed' AND scheduled_time < NOW() - INTERVAL '2 hours')
                 )
             """
             await db.execute(delete_selections)
 
-            # Delete finished / completed events
+            # Delete events that finished over 2 hours ago
             delete_events = """
                 DELETE FROM events
-                WHERE scheduled_time < NOW()
-                   OR status = 'completed'
+                WHERE scheduled_time < NOW() - INTERVAL '2 hours'
+                   OR (status = 'completed' AND scheduled_time < NOW() - INTERVAL '2 hours')
             """
             await db.execute(delete_events)
 
@@ -161,8 +176,40 @@ class ScraperOrchestrator:
         except Exception as e:
             logger.error(f"Error cleaning up old events: {e}", exc_info=True)
 
+    async def _daily_cleanup(self):
+        """Daily cleanup at 6am: clear all previous day's data"""
+        try:
+            logger.info("Starting daily cleanup at 6am...")
+
+            # Delete all odds history
+            await db.execute("DELETE FROM odds_history")
+            logger.info("Cleared all odds history")
+
+            # Delete all selections
+            await db.execute("DELETE FROM selections")
+            logger.info("Cleared all selections")
+
+            # Delete all events
+            await db.execute("DELETE FROM events")
+            logger.info("Cleared all events")
+
+            # Clear Redis cache if needed
+            await redis_client.flushdb()
+            logger.info("Cleared Redis cache")
+
+            logger.info("Daily cleanup completed successfully")
+
+        except Exception as e:
+            logger.error(f"Error during daily cleanup: {e}", exc_info=True)
+
     async def _run_scraper(self, scraper_name: str):
-        """Run a single scraper"""
+        """Run a single scraper (only between 6am-10pm)"""
+        # Check if we're within operating hours (6am-10pm)
+        current_hour = datetime.now().hour
+        if current_hour < 6 or current_hour >= 22:
+            logger.debug(f"Skipping {scraper_name} scraper - outside operating hours (6am-10pm)")
+            return
+
         if scraper_name not in self.scrapers:
             logger.error(f"Scraper '{scraper_name}' not found")
             return
@@ -217,7 +264,7 @@ class ScraperOrchestrator:
 
         # Stop scheduler
         if self.scheduler.running:
-            self.scheduler.shutdown(wait=False)
+            self.scheduler.shutdown(wait=True)
 
         # Cleanup all scrapers
         for name, scraper in self.scrapers.items():
@@ -241,7 +288,7 @@ async def main():
     # Setup signal handlers for graceful shutdown
     def signal_handler(sig, frame):
         logger.info("Shutdown signal received")
-        asyncio.create_task(orchestrator.cleanup())
+        orchestrator.is_running = False
 
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)

@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { Event, Odds, ScraperStatus } from '../types'
+import { Event, Odds, ScraperStatus, CurrentOrder, ClearedOrder } from '../types'
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
@@ -35,6 +35,19 @@ export const oddsApi = {
     return response.data
   },
 
+  getBatchOdds: async (
+    eventIds: number[],
+    bookmakerIds?: string
+  ): Promise<Record<number, Odds[]>> => {
+    const response = await api.get('/odds/batch', {
+      params: {
+        event_ids: eventIds.join(','),
+        bookmaker_ids: bookmakerIds,
+      },
+    })
+    return response.data
+  },
+
   getSelectionHistory: async (
     selectionId: number,
     hours: number = 1,
@@ -63,6 +76,22 @@ export const statusApi = {
 
   getHealth: async (): Promise<any> => {
     const response = await api.get('/status/health')
+    return response.data
+  },
+}
+
+export const ordersApi = {
+  getCurrentOrders: async (): Promise<{ orders: CurrentOrder[] }> => {
+    const response = await api.get('/orders/current')
+    return response.data
+  },
+
+  getClearedOrders: async (
+    settledDate?: string
+  ): Promise<{ orders: ClearedOrder[]; totalProfit: number; settledDate: string }> => {
+    const response = await api.get('/orders/cleared', {
+      params: settledDate ? { settled_date: settledDate } : undefined,
+    })
     return response.data
   },
 }

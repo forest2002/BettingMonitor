@@ -71,12 +71,16 @@ async def get_event_odds(
         for row in rows:
             key = (row['selection_id'], row['bookmaker_id'])
             if key not in odds_dict:
-                odds_dict[key] = dict(row)
+                row_dict = dict(row)
+                # Parse metadata JSON string to dict
+                if row_dict.get('metadata') and isinstance(row_dict['metadata'], str):
+                    row_dict['metadata'] = json.loads(row_dict['metadata'])
+                odds_dict[key] = row_dict
 
         odds_list = list(odds_dict.values())
 
-        # Cache for 30 seconds
-        await redis_client.set(cache_key, odds_list, expiry=30)
+        # Cache for 1 second only (ensure very fresh data)
+        await redis_client.set(cache_key, odds_list, expiry=1)
 
         return [OddsWithDetailsSchema(**item) for item in odds_list]
 
@@ -145,6 +149,92 @@ async def get_selection_odds_history(
     except Exception as e:
         logger.error(f"Error fetching odds history for selection {selection_id}: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch odds history")
+
+@router.get("/batch")
+async def get_batch_odds(
+    event_ids: str = Query(..., description="Comma-separated event IDs"),
+    bookmaker_ids: Optional[str] = Query(None, description="Comma-separated bookmaker IDs")
+):
+    """
+    Get odds for multiple events in a single request (batch endpoint)
+
+    This is much more efficient than making individual requests per event.
+    Returns a dictionary with event_id as key and odds list as value.
+    """
+    try:
+        # Parse event IDs
+        event_id_list = [int(x.strip()) for x in event_ids.split(',')]
+
+        # Try cache first
+        cache_key = f"odds:batch:{event_ids}"
+        if bookmaker_ids:
+            cache_key += f":{bookmaker_ids}"
+
+        cached_data = await redis_client.get(cache_key)
+        if cached_data:
+            logger.info(f"Cache hit for batch odds ({len(event_id_list)} events)")
+            return cached_data
+
+        # Build query for all events at once
+        event_placeholders = ','.join(f'${i+1}' for i in range(len(event_id_list)))
+        query = f"""
+            SELECT
+                oh.id, oh.selection_id, oh.bookmaker_id,
+                oh.odds_decimal, oh.place_odds, oh.place_terms,
+                oh.scraped_at, oh.metadata,
+                s.name as selection_name,
+                b.display_name as bookmaker_name,
+                e.name as event_name,
+                e.id as event_id,
+                e.scheduled_time,
+                e.venue
+            FROM odds_history oh
+            JOIN selections s ON oh.selection_id = s.id
+            JOIN events e ON s.event_id = e.id
+            JOIN bookmakers b ON oh.bookmaker_id = b.id
+            WHERE e.id IN ({event_placeholders})
+            AND oh.scraped_at > NOW() - INTERVAL '5 minutes'
+        """
+        params = event_id_list
+
+        if bookmaker_ids:
+            bookmaker_id_list = [int(x.strip()) for x in bookmaker_ids.split(',')]
+            bookmaker_placeholders = ','.join(f'${i+len(event_id_list)+1}' for i in range(len(bookmaker_id_list)))
+            query += f" AND oh.bookmaker_id IN ({bookmaker_placeholders})"
+            params.extend(bookmaker_id_list)
+
+        query += " ORDER BY e.id, s.name, oh.scraped_at DESC"
+
+        rows = await db.fetch_all(query, *params)
+
+        # Group by event_id and get latest odds per selection-bookmaker
+        result = {}
+        for row in rows:
+            event_id = row['event_id']
+            if event_id not in result:
+                result[event_id] = {}
+
+            key = (row['selection_id'], row['bookmaker_id'])
+            if key not in result[event_id]:
+                row_dict = dict(row)
+                if row_dict.get('metadata') and isinstance(row_dict['metadata'], str):
+                    row_dict['metadata'] = json.loads(row_dict['metadata'])
+                result[event_id][key] = row_dict
+
+        # Convert to list format
+        final_result = {
+            event_id: list(odds_dict.values())
+            for event_id, odds_dict in result.items()
+        }
+
+        # No caching - always return freshest data
+        # await redis_client.set(cache_key, final_result, expiry=1)
+
+        return final_result
+
+    except Exception as e:
+        logger.error(f"Error fetching batch odds: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch batch odds")
 
 @router.get("/best")
 async def get_best_odds(

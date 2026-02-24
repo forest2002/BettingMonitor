@@ -56,7 +56,7 @@ You'll need three pieces of information:
 
 ## Step 4: Configure Your Application
 
-1. **Open the `.env` file** in the betting-monitor directory
+1. **Open the `.env` file** in the each-way-tracker directory
 
 2. **Add your Betfair credentials**:
 

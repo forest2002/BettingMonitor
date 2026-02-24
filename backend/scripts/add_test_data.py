@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Add test data to demonstrate the betting monitor system
+Add test data to demonstrate the each-way tracker system
 
 WARNING: This script inserts FAKE test data into the database.
 Only run this in development/testing environments.

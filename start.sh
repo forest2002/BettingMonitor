@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "======================================"
-echo "Betting Monitor - Quick Start"
+echo "Each-Way Tracker - Quick Start"
 echo "======================================"
 echo ""
 

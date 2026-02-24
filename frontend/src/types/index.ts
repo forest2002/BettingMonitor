@@ -36,6 +36,41 @@ export interface Odds {
   venue: string | null
 }
 
+export interface CurrentOrder {
+  betId: string
+  marketId: string
+  selectionId: number
+  side: 'BACK' | 'LAY'
+  price: number
+  size: number
+  sizeMatched: number
+  sizeRemaining: number
+  status: string
+  placedDate: string
+  matchedDate: string
+  eventName: string
+  marketName: string
+  runnerName: string
+  scheduledTime: string
+  isEachWay: boolean
+}
+
+export interface ClearedOrder {
+  betId: string
+  marketId: string
+  selectionId: number
+  side: 'BACK' | 'LAY'
+  priceMatched: number
+  sizeSettled: number
+  profit: number
+  placedDate: string
+  settledDate: string
+  eventName: string
+  marketName: string
+  runnerName: string
+  isEachWay: boolean
+}
+
 export interface ScraperStatus {
   bookmaker_id: number
   bookmaker_name: string

@@ -15,7 +15,7 @@ class Database:
             self.pool = await asyncpg.create_pool(
                 host=os.getenv('DB_HOST', 'localhost'),
                 port=int(os.getenv('DB_PORT', 5432)),
-                database=os.getenv('DB_NAME', 'betting_monitor'),
+                database=os.getenv('DB_NAME', 'each_way_tracker'),
                 user=os.getenv('DB_USER', 'betting_user'),
                 password=os.getenv('DB_PASSWORD', ''),
                 min_size=2,

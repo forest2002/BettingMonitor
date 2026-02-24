@@ -114,7 +114,7 @@ The database schema is automatically created when PostgreSQL starts via `db/init
 
 To access the database:
 ```bash
-docker-compose exec postgres psql -U betting_user -d betting_monitor
+docker-compose exec postgres psql -U betting_user -d each_way_tracker
 ```
 
 Useful queries:

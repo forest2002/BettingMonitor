@@ -8,6 +8,39 @@ from db.redis_client import redis_client
 
 logger = logging.getLogger(__name__)
 
+
+def _ordinal_date(dt: datetime) -> str:
+    """Format datetime as e.g. '15th Feb'"""
+    day = dt.day
+    if 11 <= day <= 13:
+        suffix = 'th'
+    else:
+        suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+    return f"{day}{suffix} {dt.strftime('%b')}"
+
+
+def _race_description(metadata: dict | None) -> str | None:
+    """Get the best race description from metadata.
+    Prefer market_name (e.g. '2m Mdn Hrd') over race_type (e.g. 'Hurdle')."""
+    if not metadata:
+        return None
+    market_name = metadata.get('market_name', '')
+    # market_name is typically something like "2m Mdn Hrd" — use it if non-empty
+    if market_name:
+        return market_name
+    return metadata.get('race_type')
+
+
+def _format_event_name(venue: str | None, scheduled_time: datetime, metadata: dict | None) -> str:
+    """Format event name as 'Venue - 15th Feb - 2m Mdn Hrd'"""
+    parts = [venue or 'Unknown']
+    parts.append(_ordinal_date(scheduled_time))
+    desc = _race_description(metadata)
+    if desc:
+        parts.append(desc)
+    return ' - '.join(parts)
+
+
 class DataProcessor:
     """Process scraped odds data and store in database"""
 
@@ -42,8 +75,9 @@ class DataProcessor:
                     event = await self._get_or_create_event(odds_data)
                     event_id = event['id']
 
-                    # Get or create selection
-                    selection = await self._get_or_create_selection(event_id, odds_data.selection_name)
+                    # Get or create selection (with runner status from metadata if available)
+                    runner_status = odds_data.metadata.get('status') if odds_data.metadata else None
+                    selection = await self._get_or_create_selection(event_id, odds_data.selection_name, runner_status)
                     selection_id = selection['id']
 
                     # Check for duplicate (same selection, bookmaker, and similar odds in last 2 minutes)
@@ -151,9 +185,33 @@ class DataProcessor:
                 event = await db.fetch_one(query, odds_data.event_name, odds_data.scheduled_time)
 
         if event:
-            return dict(event)
+            event = dict(event)
+            # If the existing event has no market_name but incoming data does, update it
+            incoming_meta = odds_data.metadata or {}
+            existing_meta = json.loads(event['metadata']) if event.get('metadata') else {}
+            incoming_market_name = incoming_meta.get('market_name', '')
+            incoming_race_type = incoming_meta.get('race_type')
+            needs_update = False
+            if incoming_market_name and not existing_meta.get('market_name'):
+                existing_meta['market_name'] = incoming_market_name
+                needs_update = True
+            if incoming_race_type and not existing_meta.get('race_type'):
+                existing_meta['race_type'] = incoming_race_type
+                needs_update = True
+            if needs_update:
+                new_name = _format_event_name(event.get('venue'), event['scheduled_time'], existing_meta)
+                update_query = """
+                    UPDATE events SET name = $1, metadata = $2 WHERE id = $3
+                """
+                await db.execute(update_query, new_name, json.dumps(existing_meta), event['id'])
+                event['name'] = new_name
+                event['metadata'] = json.dumps(existing_meta)
+            return event
 
-        # Create new event
+        # Create new event with formatted name
+        event_metadata = dict(odds_data.metadata) if odds_data.metadata else {}
+        formatted_name = _format_event_name(odds_data.venue, odds_data.scheduled_time, event_metadata)
+
         insert_query = """
             INSERT INTO events (event_type_id, name, venue, scheduled_time, status, metadata)
             VALUES ($1, $2, $3, $4, 'upcoming', $5)
@@ -162,28 +220,38 @@ class DataProcessor:
         event = await db.fetch_one(
             insert_query,
             event_type_id,
-            odds_data.event_name,
+            formatted_name,
             odds_data.venue,
             odds_data.scheduled_time,
-            json.dumps(odds_data.metadata) if odds_data.metadata else None
+            json.dumps(event_metadata) if event_metadata else None
         )
         return dict(event)
 
-    async def _get_or_create_selection(self, event_id: int, selection_name: str) -> dict:
-        """Get or create selection record"""
-        query = "SELECT id, event_id, name FROM selections WHERE event_id = $1 AND name = $2"
+    async def _get_or_create_selection(self, event_id: int, selection_name: str, runner_status: str | None = None) -> dict:
+        """Get or create selection record, update metadata with runner status"""
+        query = "SELECT id, event_id, name, metadata FROM selections WHERE event_id = $1 AND name = $2"
         selection = await db.fetch_one(query, event_id, selection_name)
 
         if selection:
+            # Update metadata with runner status if provided
+            if runner_status:
+                existing_meta = json.loads(selection['metadata']) if selection.get('metadata') else {}
+                existing_meta['runner_status'] = runner_status
+                update_query = "UPDATE selections SET metadata = $1 WHERE id = $2"
+                await db.execute(update_query, json.dumps(existing_meta), selection['id'])
+                selection_dict = dict(selection)
+                selection_dict['metadata'] = json.dumps(existing_meta)
+                return selection_dict
             return dict(selection)
 
-        # Create new selection
+        # Create new selection with metadata
+        metadata = {"runner_status": runner_status} if runner_status else {}
         insert_query = """
-            INSERT INTO selections (event_id, name)
-            VALUES ($1, $2)
-            RETURNING id, event_id, name
+            INSERT INTO selections (event_id, name, metadata)
+            VALUES ($1, $2, $3)
+            RETURNING id, event_id, name, metadata
         """
-        selection = await db.fetch_one(insert_query, event_id, selection_name)
+        selection = await db.fetch_one(insert_query, event_id, selection_name, json.dumps(metadata) if metadata else None)
         return dict(selection)
 
     async def _is_duplicate(self, selection_id: int, bookmaker_id: int, odds_decimal: float) -> bool:

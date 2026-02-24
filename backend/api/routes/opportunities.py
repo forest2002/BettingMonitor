@@ -1,8 +1,9 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, BackgroundTasks
 from typing import List
 from datetime import datetime, timedelta
 from db.database import db
 from services.calculators.each_way_calculator import EachWayCalculator
+from services.google_sheets import append_opportunities as append_to_sheets, get_spreadsheet_url
 import logging
 
 logger = logging.getLogger(__name__)
@@ -10,8 +11,9 @@ router = APIRouter(prefix="/opportunities", tags=["opportunities"])
 
 @router.get("/each-way")
 async def get_each_way_opportunities(
+    background_tasks: BackgroundTasks,
     min_rating: int = Query(default=0, description="Minimum opportunity rating"),
-    hours_ahead: int = Query(default=24, ge=1, le=168)
+    hours_ahead: int = Query(default=24, ge=1, le=168),
 ):
     """
     Get each-way profit maximiser opportunities.
@@ -90,6 +92,8 @@ async def get_each_way_opportunities(
             result.append({
                 'selection_name': opp['selection_name'],
                 'event_name': opp['event_name'],
+                'venue': opp.get('venue'),
+                'scheduled_time': opp['scheduled_time'].isoformat() if opp.get('scheduled_time') else None,
                 'bookmaker': opp['bookmaker'],
                 'bookmaker_win_odds': float(opp['bookmaker_win_odds']),
                 'bookmaker_place_odds': float(opp['bookmaker_place_odds']),
@@ -105,7 +109,12 @@ async def get_each_way_opportunities(
                 'profit_if_places': float(opp['profit_if_places']),
                 'profit_if_loses': float(opp['profit_if_loses']),
                 'num_places': opp['num_places'],
+                'is_fair_odds': opp.get('is_fair_odds', False),
             })
+
+        # Append to Google Sheet in background (don't block response)
+        if result:
+            background_tasks.add_task(append_to_sheets, result)
 
         return {
             'count': len(result),
@@ -115,6 +124,12 @@ async def get_each_way_opportunities(
     except Exception as e:
         logger.error(f"Error fetching each-way opportunities: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to fetch opportunities")
+
+@router.get("/sheet-url")
+async def get_sheet_url():
+    """Return the Google Sheet URL for the EachWay Tracker."""
+    url = get_spreadsheet_url()
+    return {'url': url}
 
 @router.get("/summary")
 async def get_opportunities_summary():
