@@ -71,6 +71,11 @@ geckodriver*
 htmlcov/
 .pytest_cache/
 
+# Credentials & certificates
+creds.json
+backend/creds.json
+backend/certs/
+
 # Misc
 *.bak
 *.tmp
