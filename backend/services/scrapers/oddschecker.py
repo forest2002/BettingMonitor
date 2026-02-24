@@ -370,20 +370,26 @@ class OddscheckerScraper(BookmakerScraper):
                     self.logger.debug(f"No runner rows for {race_url}")
                     return []
 
-                # Count number of runners to determine place terms
-                # Standard UK/Irish racing rules:
-                # 5-7 runners: 2 places, 1/5 odds
-                # 8-15 runners: 3 places, 1/5 odds
-                # 16+ runners: 4 places, 1/5 odds
+                # Try to read actual each-way terms from the page first (reads
+                # data-ew-denom/data-ew-places attributes, CSS selectors, and
+                # page source patterns).  Fall back to standard runner-count
+                # rules only when nothing is found on the page.
                 num_runners = len(runner_rows)
-                if num_runners >= 16:
-                    place_terms = "1/5 1-2-3-4"
-                elif num_runners >= 8:
-                    place_terms = "1/5 1-2-3"
-                elif num_runners >= 5:
-                    place_terms = "1/5 1-2"
+                if num_runners < 5:
+                    place_terms = None  # No each-way betting for races with fewer than 5 runners
                 else:
-                    place_terms = None  # No each-way betting for races with less than 5 runners
+                    place_terms = self._extract_each_way_terms(driver)
+                    if place_terms is None:
+                        # Standard UK/Irish racing rules:
+                        # 5-7 runners: 2 places, 1/5 odds
+                        # 8-15 runners: 3 places, 1/5 odds
+                        # 16+ runners: 4 places, 1/5 odds
+                        if num_runners >= 16:
+                            place_terms = "1/5 1-2-3-4"
+                        elif num_runners >= 8:
+                            place_terms = "1/5 1-2-3"
+                        else:
+                            place_terms = "1/5 1-2"
 
                 self.logger.info(f"Place terms for {venue} {race_time} ({num_runners} runners): {place_terms}")
 
@@ -623,15 +629,14 @@ class OddscheckerScraper(BookmakerScraper):
                     self.logger.info(f"Found each-way terms in page source: {result}")
                     return result
 
-            # Fallback: Use 1/5 odds for 3 places as worst case (most conservative)
-            # 3 places is the most common for standard races
-            self.logger.debug("No each-way terms found, using fallback: 1/5 1-2-3")
-            return "1/5 1-2-3"
+            # Nothing found on the page — return None so the caller can apply
+            # the appropriate runner-count fallback.
+            self.logger.debug("No each-way terms found on page, will use runner-count fallback")
+            return None
 
         except Exception as e:
             self.logger.warning(f"Error extracting each-way terms: {e}")
-            # Still return fallback on error
-            return "1/5 1-2-3"
+            return None
 
     def _parse_odds(self, odds_text: str) -> Optional[Decimal]:
         try:
