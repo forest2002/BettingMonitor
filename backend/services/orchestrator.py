@@ -100,16 +100,16 @@ class ScraperOrchestrator:
         )
         logger.info("Scheduled event cleanup every 2 minutes")
 
-        # Daily cleanup: clear all data at 6am every day
+        # Daily cleanup: clear all data at 9:45pm, before scrapers stop at 10pm
         self.scheduler.add_job(
             self._daily_cleanup,
             'cron',
-            hour=6,
-            minute=0,
+            hour=21,
+            minute=45,
             id='daily_cleanup_job',
             replace_existing=True
         )
-        logger.info("Scheduled daily cleanup at 6:00 AM")
+        logger.info("Scheduled daily cleanup at 9:45 PM")
 
     async def _cleanup_old_events(self):
         """Delete events (and their selections/odds) that have finished.
@@ -177,9 +177,9 @@ class ScraperOrchestrator:
             logger.error(f"Error cleaning up old events: {e}", exc_info=True)
 
     async def _daily_cleanup(self):
-        """Daily cleanup at 6am: clear all previous day's data"""
+        """Daily cleanup at 9:45pm: clear all data before scrapers stop at 10pm"""
         try:
-            logger.info("Starting daily cleanup at 6am...")
+            logger.info("Starting daily cleanup at 9:45pm...")
 
             # Delete all odds history
             await db.execute("DELETE FROM odds_history")
