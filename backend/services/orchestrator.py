@@ -40,6 +40,10 @@ class ScraperOrchestrator:
             await redis_client.connect()
             logger.info("Database connections established")
 
+            # Clear any stale data from previous days before scrapers start
+            await self._daily_cleanup()
+            logger.info("Startup cleanup complete")
+
             # Initialize Betfair REST API client (simple polling, no streaming complexity)
             logger.info("Initializing Betfair REST API client...")
             from services.scrapers.betfair_api import BetfairAPIClient
@@ -100,7 +104,20 @@ class ScraperOrchestrator:
         )
         logger.info("Scheduled event cleanup every 2 minutes")
 
-        # Daily cleanup: clear all data at 9:45pm, before scrapers stop at 10pm
+        # Morning cleanup at 6am: guarantees a clean slate at the start of each
+        # racing day even if the previous night's cleanup was missed (e.g. crash).
+        self.scheduler.add_job(
+            self._daily_cleanup,
+            'cron',
+            hour=6,
+            minute=0,
+            id='morning_cleanup_job',
+            replace_existing=True
+        )
+        logger.info("Scheduled morning cleanup at 6:00 AM")
+
+        # Evening cleanup at 9:45pm: clears accumulated data before scrapers
+        # stop at 10pm, keeping disk usage low overnight.
         self.scheduler.add_job(
             self._daily_cleanup,
             'cron',
@@ -109,7 +126,7 @@ class ScraperOrchestrator:
             id='daily_cleanup_job',
             replace_existing=True
         )
-        logger.info("Scheduled daily cleanup at 9:45 PM")
+        logger.info("Scheduled evening cleanup at 9:45 PM")
 
     async def _cleanup_old_events(self):
         """Delete events (and their selections/odds) that have finished.
@@ -129,6 +146,7 @@ class ScraperOrchestrator:
             mark_stale = """
                 UPDATE events SET status = 'completed'
                 WHERE status = 'upcoming'
+                AND scheduled_time < NOW()
                 AND id NOT IN (
                     SELECT DISTINCT e.id
                     FROM events e

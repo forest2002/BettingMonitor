@@ -72,9 +72,15 @@ class BetfairAPIClient(BookmakerScraper):
             # Keep session alive
             self.client.keep_alive()
 
+            # Fetch only today's races — cap at midnight UTC to avoid pulling in
+            # tomorrow's markets and preventing cross-day data accumulation.
+            now_utc = datetime.utcnow()
+            midnight_tonight_utc = (now_utc + timedelta(days=1)).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
             time_filter = {
-                'from': datetime.utcnow().isoformat(),
-                'to': (datetime.utcnow() + timedelta(hours=24)).isoformat()
+                'from': now_utc.isoformat(),
+                'to': midnight_tonight_utc.isoformat(),
             }
 
             # Fetch both WIN and PLACE markets (both needed for each-way calculator)
